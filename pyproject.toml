@@ -1,0 +1,14 @@
+[project]
+name = "pathsimgui-react"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "pywebview>=5.4",
+    "setuptools>=80.9.0",
+]
+
+[project.optional-dependencies]
+build = [
+    "py2app>=0.28.8",
+]

@@ -1,0 +1,55 @@
+{
+  "name": "pywebview-react-boilerplate",
+  "version": "1.0.0",
+  "description": "A simple boilerplate to get started with pywebview and React",
+  "main": "index.js",
+  "scripts": {
+    "build": "npm run clean && npm run frontend:prod && run-script-os",
+    "build:macos": "./.venv/bin/python build-macos.py py2app",
+    "build:windows": "./.venv/Scripts/pyinstaller build-windows.spec",
+    "build:linux": "./.venv/bin/pyinstaller build-linux.spec",
+    "clean": "run-script-os",
+    "clean:default": "rm -rf dist 2>/dev/null; rm -rf gui 2>/dev/null; rm -rf build 2>/dev/null; ",
+    "clean:windows": "if exist dist rd /S /Q dist & if exist build rd /S /Q build & if exist gui rd /S /Q gui",
+    "dev": "vite ",
+    "frontend:dev": "vite build --outDir gui --emptyOutDir",
+    "frontend:prod": "vite build --outDir gui --emptyOutDir --minify",
+    "frontend:preview": "vite preview --outDir gui --emptyOutDir",
+    "init": "npm install && run-script-os",
+    "init:windows": "uv run pip install -r requirements.txt",
+    "init:linux": "uv sync && if [[ -z \"${KDE_FULL_SESSION}\" ]]; then npm run init:qt5; else npm run init:gtk; fi",
+    "init:default": "uv sync",
+    "init:qt5": "uv add pyqt5 pyqtwebengine",
+    "init:gtk": "sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev gir1.2-gtk-3.0 && uv add pycairo pygobject",
+    "start": "npm run frontend:dev && run-script-os",
+    "start:windows": "uv run python src\\index.py",
+    "start:default": "uv run python src/index.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/r0x0r/pywebview-react-boilerplate.git"
+  },
+  "keywords": [
+    "pywebview",
+    "react",
+    "python",
+    "javascript"
+  ],
+  "author": "Roman Sirokov",
+  "license": "BSD-3-Clause",
+  "bugs": {
+    "url": "https://github.com/r0x0r/pywebview-react-boilerplate/issues"
+  },
+  "homepage": "https://github.com/r0x0r/pywebview-react-boilerplate#readme",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "run-script-os": "^1.1.6",
+    "typescript": "^5.1.6",
+    "vite": "^5.0.0",
+    "vite-tsconfig-paths": "^4.2.1"
+  }
+}
