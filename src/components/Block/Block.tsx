@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react'
+import Port from '../Port/Port'
 
 interface Position {
     x: number
@@ -21,11 +22,12 @@ interface BlockStyle {
     stroke: string
     strokeWidth: number
     resizeCornerSize: number
+    portSize: number
 }
 
 /**
  * Block component representing a draggable and selectable block on the canvas.
- * Handles mouse events for dragging, selection, and resizing with corner handles.
+ * Handles mouse events for dragging, selection, resizing, and port connections.
  */
 export default function Block({
     id,
@@ -65,7 +67,8 @@ export default function Block({
         fill: 'white',
         stroke: selected ? 'blue' : 'black',
         strokeWidth: selected ? 2 : 1,
-        resizeCornerSize: 8
+        resizeCornerSize: 8,
+        portSize: 8
     }
 
     // Shadow offset
@@ -95,6 +98,48 @@ export default function Block({
     }, [])
 
     /**
+     * Calculates the position of input ports along the left edge of the block.
+     * @param portIndex Index of the port (0-based)
+     * @returns { x, y } position relative to block
+     */
+    const getInputPortPosition = useCallback((portIndex: number) => {
+        const portSpacing = position.height / (inPorts + 1)
+        return {
+            x: 0,
+            y: portSpacing * (portIndex + 1)
+        }
+    }, [position.height, inPorts])
+
+    /**
+     * Calculates the position of output ports along the right edge of the block.
+     * @param portIndex Index of the port (0-based)
+     * @returns { x, y } position relative to block
+     */
+    const getOutputPortPosition = useCallback((portIndex: number) => {
+        const portSpacing = position.height / (outPorts + 1)
+        return {
+            x: position.width,
+            y: portSpacing * (portIndex + 1)
+        }
+    }, [position.width, position.height, outPorts])
+
+    /**
+     * Handles port mouse down event for connection initiation.
+     * @param e Mouse event
+     * @param portType 'input' or 'output'
+     * @param portIndex Index of the port
+     */
+    const handlePortMouseDown = useCallback((
+        e: React.MouseEvent, 
+        blockId: string, 
+        portType: 'input' | 'output', 
+        portIndex: number
+    ) => {
+        // TODO: Implement connection logic
+        console.log(`Port clicked: ${portType} port ${portIndex} on block ${blockId}`)
+    }, [])
+
+    /**
      * Handles resize handle mouse down event.
      * @param e Mouse event
      * @param handle Which handle was clicked ('nw', 'ne', 'sw', 'se')
@@ -109,7 +154,6 @@ export default function Block({
         initialSizeRef.current = { width: position.width, height: position.height }
         resizeHandleRef.current = handle
         setIsResizing(true)
-        // setSelected(true)
         
         // Mouse move handler for resizing
         const handleResizeMove = (e: MouseEvent) => {
@@ -265,6 +309,40 @@ export default function Block({
                 }}
                 onMouseDown={handleMouseDown}
             />
+
+            {/* Input ports */}
+            {Array.from({ length: inPorts }, (_, index) => {
+                const portPos = getInputPortPosition(index)
+                return (
+                    <Port
+                        key={`input-${index}`}
+                        blockId={id}
+                        portType="input"
+                        portIndex={index}
+                        x={portPos.x}
+                        y={portPos.y}
+                        size={blockStyle.portSize}
+                        onPortMouseDown={handlePortMouseDown}
+                    />
+                )
+            })}
+
+            {/* Output ports */}
+            {Array.from({ length: outPorts }, (_, index) => {
+                const portPos = getOutputPortPosition(index)
+                return (
+                    <Port
+                        key={`output-${index}`}
+                        blockId={id}
+                        portType="output"
+                        portIndex={index}
+                        x={portPos.x}
+                        y={portPos.y}
+                        size={blockStyle.portSize}
+                        onPortMouseDown={handlePortMouseDown}
+                    />
+                )
+            })}
 
             {/* Block label */}
             <text
