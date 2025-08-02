@@ -1,6 +1,10 @@
-import React, { useState, useRef, useCallback } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
 import Port from '../Port/Port'
+import { blockConfigManager, BlockConfiguration } from '../../lib/BlockConfigManager'
 
+/**
+ * Represents the position and size of a block on the canvas.
+ */
 interface Position {
     x: number
     y: number
@@ -8,24 +12,31 @@ interface Position {
     height: number
 }
 
+/**
+ * Represents a configurable parameter for a block.
+ */
 interface BlockParameter {
     name: string
-    value: string | number
+    value: string | number | boolean
     type: 'string' | 'number' | 'boolean'
     description?: string
 }
 
+/**
+ * Props for the Block component.
+ */
 interface BlockProps {
     id: string
-    blockClass?: string
-    inPorts?: number
-    outPorts?: number
+    blockType: string
     position?: Partial<Position>
     isPreview?: boolean
     parameters?: BlockParameter[]
     onParameterChange?: (blockId: string, parameters: BlockParameter[]) => void
 }
 
+/**
+ * Styling configuration for a block.
+ */
 interface BlockStyle {
     fill: string
     stroke: string
@@ -35,20 +46,26 @@ interface BlockStyle {
 }
 
 /**
- * Block component representing a draggable and selectable block on the canvas.
- * Handles mouse events for dragging, selection, resizing, port connections, and parameter editing.
+ * Block component representing a draggable, configurable block on the canvas.
+ * Handles rendering, selection, dragging, resizing, and parameter editing.
  */
 export default function Block({
     id,
-    blockClass = null,
-    inPorts = 1,
-    outPorts = 1,
+    blockType,
     position: initialPosition = {},
     isPreview = false,
     parameters = [],
     onParameterChange
 }: BlockProps) {
-    // State for block position and dimensions
+    // State hooks, these need to be at the top
+    
+    // Block configuration loaded from JSON
+    const [blockConfig, setBlockConfig] = useState<BlockConfiguration | null>(null)
+
+    // Loading state for async config fetch
+    const [loading, setLoading] = useState(true)
+    
+    // Position and size of the block
     const [position, setPosition] = useState<Position>({
         x: 50,
         y: 50,
@@ -63,6 +80,8 @@ export default function Block({
     const [isResizing, setIsResizing] = useState(false)
     const [showResizeHandles, setShowResizeHandles] = useState(false)
     const [showParameterDialog, setShowParameterDialog] = useState(false)
+
+    // Parameters for the block (editable by user)
     const [blockParameters, setBlockParameters] = useState<BlockParameter[]>(
         parameters.length > 0 ? parameters : [
             { name: 'gain', value: 1.0, type: 'number', description: 'Gain factor' },
@@ -71,45 +90,70 @@ export default function Block({
         ]
     )
 
-    // Drag state refs
+    // Ref hooks for managing state during interactions
+    // Drag and resize state tracking
     const dragStartRef = useRef({ x: 0, y: 0 })
     const blockStartRef = useRef({ x: 0, y: 0 })
     const isDraggingRef = useRef(false)
     const clickCountRef = useRef(0)
     const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-    
-    // Resize state refs
     const resizeStartRef = useRef({ x: 0, y: 0 })
     const initialSizeRef = useRef({ width: 0, height: 0 })
     const resizeHandleRef = useRef<string>('')
 
-    // Block styling
-    const blockStyle: BlockStyle = {
-        fill: 'white',
-        stroke: selected ? 'blue' : 'black',
-        strokeWidth: selected ? 2 : 1,
-        resizeCornerSize: 8,
-        portSize: 8
-    }
-
-    // Shadow offset
-    const shadowOffset = 3
+    // Effects to load block configuration - might not be necessary if config is static
+    /**
+     * Loads block configuration from JSON when blockType changes.
+     * Sets default parameters if none are provided.
+     */
+    useEffect(() => {
+        const loadConfig = async () => {
+            try {
+                setLoading(true)
+                const config = await blockConfigManager.loadBlockConfig(blockType)
+                setBlockConfig(config)
+                
+                // If no parameters provided, use defaults from config
+                if (parameters.length === 0) {
+                    const defaultParams = blockConfigManager.createDefaultParameters(blockType)
+                    setBlockParameters(defaultParams)
+                }
+            } catch (error) {
+                console.error(`Failed to load configuration for ${blockType}:`, error)
+            } finally {
+                setLoading(false)
+            }
+        }
+        
+        loadConfig()
+    }, [blockType, parameters.length])
 
     /**
-     * Converts screen coordinates to SVG coordinates.
-     * @param e Mouse event
-     * @returns { x, y } in SVG space
+     * Updates block size to match config defaults if not set in initialPosition.
+     */
+    useEffect(() => {
+        if (blockConfig && !initialPosition.width && !initialPosition.height) {
+            setPosition(prev => ({
+                ...prev,
+                width: blockConfig.styling.defaultSize.width,
+                height: blockConfig.styling.defaultSize.height
+            }))
+        }
+    }, [blockConfig, initialPosition.width, initialPosition.height])
+
+    // All callbacks
+
+    /**
+     * Converts mouse event coordinates to SVG coordinates.
      */
     const getSVGMousePosition = useCallback((e: React.MouseEvent | MouseEvent) => {
         const svg = (e.target as SVGElement).ownerSVGElement
         if (!svg) return { x: 0, y: 0 }
         
-        // Create an SVG point and transform it properly
         const point = svg.createSVGPoint()
         point.x = e.clientX
         point.y = e.clientY
         
-        // Transform screen coordinates to SVG coordinates
         const svgPoint = point.matrixTransform(svg.getScreenCTM()?.inverse())
         
         return {
@@ -119,53 +163,43 @@ export default function Block({
     }, [])
 
     /**
-     * Handles parameter updates from the parameter dialog.
-     * @param newParameters Updated parameters array
+     * Handles updates to block parameters from the parameter dialog.
      */
     const handleParameterUpdate = useCallback((newParameters: BlockParameter[]) => {
         setBlockParameters(newParameters)
         onParameterChange?.(id, newParameters)
     }, [id, onParameterChange])
 
-    // /**
-    //  * Handles double-click to open parameter dialog.
-    //  */
-    // const handleDoubleClick = useCallback(() => {
-    //     setShowParameterDialog(true)
-    //     setSelected(true)
-    // }, [])
-
     /**
-     * Calculates the position of input ports along the left edge of the block.
-     * @param portIndex Index of the port (0-based)
-     * @returns { x, y } position relative to block
+     * Calculates the position of an input port.
      */
     const getInputPortPosition = useCallback((portIndex: number) => {
+        const inPorts = blockConfig?.ports.inputs || 0
+        if (inPorts === 0) return { x: 0, y: 0 }
+        
         const portSpacing = position.height / (inPorts + 1)
         return {
             x: 0,
             y: portSpacing * (portIndex + 1)
         }
-    }, [position.height, inPorts])
+    }, [position.height, blockConfig?.ports.inputs])
 
     /**
-     * Calculates the position of output ports along the right edge of the block.
-     * @param portIndex Index of the port (0-based)
-     * @returns { x, y } position relative to block
+     * Calculates the position of an output port.
      */
     const getOutputPortPosition = useCallback((portIndex: number) => {
+        const outPorts = blockConfig?.ports.outputs || 0
+        if (outPorts === 0) return { x: 0, y: 0 }
+        
         const portSpacing = position.height / (outPorts + 1)
         return {
             x: position.width,
             y: portSpacing * (portIndex + 1)
         }
-    }, [position.width, position.height, outPorts])
+    }, [position.width, position.height, blockConfig?.ports.outputs])
 
     /**
-     * Handles port mouse down event for connection initiation.
-     * @param e Mouse event
-     * @param portType 'input' or 'output'
-     * @param portIndex Index of the port
+     * Handles mouse down on a port (for connection logic).
      */
     const handlePortMouseDown = useCallback((
         e: React.MouseEvent, 
@@ -173,21 +207,18 @@ export default function Block({
         portType: 'input' | 'output', 
         portIndex: number
     ) => {
-        // TODO: Implement connection logic
         console.log(`Port clicked: ${portType} port ${portIndex} on block ${blockId}`)
     }, [])
 
     /**
-     * Handles resize handle mouse down event.
-     * @param e Mouse event
-     * @param handle Which handle was clicked ('nw', 'ne', 'sw', 'se')
+     * Handles mouse down on a resize handle.
+     * Initiates resizing logic for the block.
      */
     const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
         e.stopPropagation()
         
         const svgMousePos = getSVGMousePosition(e)
         
-        // Store initial resize state
         resizeStartRef.current = svgMousePos
         initialSizeRef.current = { width: position.width, height: position.height }
         resizeHandleRef.current = handle
@@ -205,25 +236,24 @@ export default function Block({
             let newX = position.x
             let newY = position.y
             
-            // Apply resize based on which handle is being dragged
             switch (handle) {
-                case 'nw': // Top-left
+                case 'nw':
                     newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
                     newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
                     newX = position.x + (initialSizeRef.current.width - newWidth)
                     newY = position.y + (initialSizeRef.current.height - newHeight)
                     break
-                case 'ne': // Top-right
+                case 'ne':
                     newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
                     newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
                     newY = position.y + (initialSizeRef.current.height - newHeight)
                     break
-                case 'sw': // Bottom-left
+                case 'sw':
                     newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
                     newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
                     newX = position.x + (initialSizeRef.current.width - newWidth)
                     break
-                case 'se': // Bottom-right
+                case 'se':
                     newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
                     newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
                     break
@@ -246,46 +276,41 @@ export default function Block({
             document.removeEventListener('mouseup', handleResizeUp)
         }
         
-        // Attach global listeners
         document.addEventListener('mousemove', handleResizeMove)
         document.addEventListener('mouseup', handleResizeUp)
     }, [position, getSVGMousePosition])
 
     /**
-     * Handles mouse down event to initiate drag or selection.
-     * @param e Mouse event
+     * Handles mouse down on the block for drag, selection, and double-click.
+     * Implements custom double-click detection to avoid React SVG event issues.
      */
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
         e.stopPropagation()
         
         const svgMousePos = getSVGMousePosition(e)
         
-        // Store initial positions
         dragStartRef.current = svgMousePos
         blockStartRef.current = { x: position.x, y: position.y }
         isDraggingRef.current = false
 
-        // Mouse move handler
+        // Mouse move handler for dragging
         const handleMouseMove = (e: MouseEvent) => {
             const currentMouse = getSVGMousePosition(e)
             
-            // Calculate movement delta
             const deltaX = currentMouse.x - dragStartRef.current.x
             const deltaY = currentMouse.y - dragStartRef.current.y
             
-            // Check if we should start dragging (3px threshold)
             const dragDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
             if (dragDistance > 3 && !isDraggingRef.current) {
                 isDraggingRef.current = true
                 setIsDragging(true)
-                // Cancel any pending click detection when dragging starts
+                // Cancel click detection if drag starts
                 if (clickTimeoutRef.current) {
                     clearTimeout(clickTimeoutRef.current)
                     clickCountRef.current = 0
                 }
             }
             
-            // Update position during drag
             if (isDraggingRef.current) {
                 setPosition(prev => ({
                     ...prev,
@@ -296,10 +321,9 @@ export default function Block({
         }
 
         /**
-         * Handles mouse up event to finalize drag or handle clicks.
+         * Handles mouse up to finalize drag or handle single/double click.
          */
         const handleMouseUp = () => {
-            // Only handle clicks if we didn't drag
             if (!isDraggingRef.current) {
                 clickCountRef.current++
                 
@@ -310,12 +334,11 @@ export default function Block({
                 if (clickCountRef.current === 1) {
                     // Wait to see if this becomes a double-click
                     clickTimeoutRef.current = setTimeout(() => {
-                        // Single click confirmed
                         setSelected(prev => !prev)
                         clickCountRef.current = 0
                     }, 250)
                 } else if (clickCountRef.current === 2) {
-                    // Double-click confirmed - open parameter dialog
+                    // Double-click confirmed - add logging back
                     console.log('Double-click detected, opening dialog')
                     console.log('Current blockParameters:', blockParameters)
                     console.log('Current showParameterDialog:', showParameterDialog)
@@ -325,27 +348,54 @@ export default function Block({
                 }
             }
             
-            // Clean up
             setIsDragging(false)
             isDraggingRef.current = false
             document.removeEventListener('mousemove', handleMouseMove)
             document.removeEventListener('mouseup', handleMouseUp)
         }
 
-        // Attach global listeners
         document.addEventListener('mousemove', handleMouseMove)
         document.addEventListener('mouseup', handleMouseUp)
     }, [position, getSVGMousePosition])
 
-    /**
-     * Handles double-click to open parameter dialog.
-     * This is kept as a fallback but the main logic is in handleMouseDown
-     */
-    const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-        e.stopPropagation()
-        // This might not fire reliably in SVG, so we handle it in mousedown/mouseup
-    }, [])
+    // NOW WE CAN DO EARLY RETURNS AFTER ALL HOOKS ARE DECLARED
+    
+    // Block styling
+    const blockStyle: BlockStyle = {
+        fill: blockConfig?.styling.color || 'white',
+        stroke: selected ? 'blue' : (blockConfig?.styling.borderColor || 'black'),
+        strokeWidth: selected ? 2 : 1,
+        resizeCornerSize: 8,
+        portSize: 8
+    }
 
+    const shadowOffset = 3
+
+    // Early Return for Loading State
+    if (loading || !blockConfig) {
+        return (
+            <g transform={`translate(${position.x}, ${position.y})`}>
+                <rect
+                    width={100}
+                    height={40}
+                    fill="#f0f0f0"
+                    stroke="#ccc"
+                    rx="2"
+                />
+                <text
+                    x={50}
+                    y={25}
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill="#666"
+                >
+                    Loading...
+                </text>
+            </g>
+        )
+    }
+
+    // Main Render
     return (
         <>
             <g
@@ -382,27 +432,24 @@ export default function Block({
                         userSelect: 'none'
                     }}
                     onMouseDown={handleMouseDown}
-                    // onDoubleClick={handleDoubleClick}
                 />
 
-                {/* Block class name inside block */}
-                {blockClass && (
-                    <text
-                        x={position.width / 2}
-                        y={position.height / 2}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        fontSize="10"
-                        fontFamily="sans-serif"
-                        fill="black"
-                        style={{ userSelect: 'none', pointerEvents: 'none' }}
-                    >
-                        {blockClass}
-                    </text>
-                )}
+                {/* Block display name inside block */}
+                <text
+                    x={position.width / 2}
+                    y={position.height / 2}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fontSize="10"
+                    fontFamily="sans-serif"
+                    fill={blockConfig.styling.textColor}
+                    style={{ userSelect: 'none', pointerEvents: 'none' }}
+                >
+                    {blockConfig.displayName}
+                </text>
 
                 {/* Input ports */}
-                {Array.from({ length: inPorts }, (_, index) => {
+                {Array.from({ length: blockConfig.ports.inputs }, (_, index) => {
                     const portPos = getInputPortPosition(index)
                     return (
                         <Port
@@ -419,7 +466,7 @@ export default function Block({
                 })}
 
                 {/* Output ports */}
-                {Array.from({ length: outPorts }, (_, index) => {
+                {Array.from({ length: blockConfig.ports.outputs }, (_, index) => {
                     const portPos = getOutputPortPosition(index)
                     return (
                         <Port
@@ -451,7 +498,6 @@ export default function Block({
                 {/* Resize handles */}
                 {showResizeHandles && !isDragging && !isResizing && (
                     <>
-                        {/* Top-left handle */}
                         <rect
                             x={-blockStyle.resizeCornerSize / 2}
                             y={-blockStyle.resizeCornerSize / 2}
@@ -462,7 +508,6 @@ export default function Block({
                             style={{ cursor: 'nwse-resize' }}
                             onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
                         />
-                        {/* Top-right handle */}
                         <rect
                             x={position.width - blockStyle.resizeCornerSize / 2}
                             y={-blockStyle.resizeCornerSize / 2}
@@ -473,7 +518,6 @@ export default function Block({
                             style={{ cursor: 'nesw-resize' }}
                             onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
                         />
-                        {/* Bottom-left handle */}
                         <rect
                             x={-blockStyle.resizeCornerSize / 2}
                             y={position.height - blockStyle.resizeCornerSize / 2}
@@ -484,7 +528,6 @@ export default function Block({
                             style={{ cursor: 'nesw-resize' }}
                             onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
                         />
-                        {/* Bottom-right handle */}
                         <rect
                             x={position.width - blockStyle.resizeCornerSize / 2}
                             y={position.height - blockStyle.resizeCornerSize / 2}
@@ -500,10 +543,10 @@ export default function Block({
             </g>
 
             {/* Parameter Dialog */}
-            {showParameterDialog && (
+            {showParameterDialog && blockConfig && (
                 <ParameterDialog
                     blockId={id}
-                    blockClass={blockClass}
+                    blockConfig={blockConfig}
                     parameters={blockParameters}
                     onParameterUpdate={handleParameterUpdate}
                     onClose={() => setShowParameterDialog(false)}
@@ -514,25 +557,32 @@ export default function Block({
 }
 
 /**
- * Parameter Dialog Component for editing block parameters
+ * Props for the ParameterDialog component.
  */
 interface ParameterDialogProps {
     blockId: string
-    blockClass?: string
+    blockConfig: BlockConfiguration
     parameters: BlockParameter[]
     onParameterUpdate: (parameters: BlockParameter[]) => void
     onClose: () => void
 }
 
+/**
+ * Modal dialog for editing block parameters.
+ * Allows user to change parameter values and save/cancel changes.
+ */
 function ParameterDialog({ 
     blockId, 
-    blockClass, 
+    blockConfig, 
     parameters, 
     onParameterUpdate, 
     onClose 
 }: ParameterDialogProps) {
     const [localParameters, setLocalParameters] = useState<BlockParameter[]>(parameters)
 
+    /**
+     * Handles changes to individual parameter fields.
+     */
     const handleParameterChange = useCallback((index: number, field: keyof BlockParameter, value: any) => {
         setLocalParameters(prev => 
             prev.map((param, i) => 
@@ -541,6 +591,9 @@ function ParameterDialog({
         )
     }, [])
 
+    /**
+     * Handles saving changes and closing the dialog.
+     */
     const handleSave = useCallback(() => {
         onParameterUpdate(localParameters)
         onClose()
@@ -561,7 +614,7 @@ function ParameterDialog({
             minWidth: '300px'
         }}>
             <h3>Block Parameters: {blockId}</h3>
-            {blockClass && <p><strong>Type:</strong> {blockClass}</p>}
+            <p><strong>Type:</strong> {blockConfig.displayName}</p>
             
             <div style={{ marginBottom: '20px' }}>
                 {localParameters.map((param, index) => (

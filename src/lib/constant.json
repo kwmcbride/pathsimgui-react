@@ -1,0 +1,49 @@
+{
+    "blockType": "Constant",
+    "displayName": "Constant",
+    "description": "Outputs a constant value",
+    "pathsimClass": "Constant",
+    "category": "Sources",
+    "ports": {
+        "inputs": 0,
+        "outputs": 1
+    },
+    "parameters": [
+        {
+            "name": "value",
+            "displayName": "Constant Value",
+            "type": "number",
+            "defaultValue": 1.0,
+            "description": "The constant value to output",
+            "required": true,
+            "validation": {
+                "min": null,
+                "max": null
+            }
+        },
+        {
+            "name": "dataType",
+            "displayName": "Data Type",
+            "type": "string",
+            "defaultValue": "double",
+            "description": "Output data type",
+            "required": true,
+            "options": ["double", "single", "int32", "int16", "int8", "uint32", "uint16", "uint8"]
+        }
+    ],
+    "styling": {
+        "defaultSize": {
+            "width": 80,
+            "height": 40
+        },
+        "color": "#FFE6CC",
+        "borderColor": "#D79B00",
+        "textColor": "#000000",
+        "iconPath": "/icons/constant.svg"
+    },
+    "simulation": {
+        "canBeSubsystem": false,
+        "executionOrder": 1,
+        "sampleTime": "inherited"
+    }
+}
