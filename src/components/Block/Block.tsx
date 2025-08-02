@@ -8,6 +8,13 @@ interface Position {
     height: number
 }
 
+interface BlockParameter {
+    name: string
+    value: string | number
+    type: 'string' | 'number' | 'boolean'
+    description?: string
+}
+
 interface BlockProps {
     id: string
     blockClass?: string
@@ -15,6 +22,8 @@ interface BlockProps {
     outPorts?: number
     position?: Partial<Position>
     isPreview?: boolean
+    parameters?: BlockParameter[]
+    onParameterChange?: (blockId: string, parameters: BlockParameter[]) => void
 }
 
 interface BlockStyle {
@@ -27,7 +36,7 @@ interface BlockStyle {
 
 /**
  * Block component representing a draggable and selectable block on the canvas.
- * Handles mouse events for dragging, selection, resizing, and port connections.
+ * Handles mouse events for dragging, selection, resizing, port connections, and parameter editing.
  */
 export default function Block({
     id,
@@ -35,7 +44,9 @@ export default function Block({
     inPorts = 1,
     outPorts = 1,
     position: initialPosition = {},
-    isPreview = false
+    isPreview = false,
+    parameters = [],
+    onParameterChange
 }: BlockProps) {
     // State for block position and dimensions
     const [position, setPosition] = useState<Position>({
@@ -51,11 +62,21 @@ export default function Block({
     const [isDragging, setIsDragging] = useState(false)
     const [isResizing, setIsResizing] = useState(false)
     const [showResizeHandles, setShowResizeHandles] = useState(false)
+    const [showParameterDialog, setShowParameterDialog] = useState(false)
+    const [blockParameters, setBlockParameters] = useState<BlockParameter[]>(
+        parameters.length > 0 ? parameters : [
+            { name: 'gain', value: 1.0, type: 'number', description: 'Gain factor' },
+            { name: 'enabled', value: true, type: 'boolean', description: 'Enable this block' },
+            { name: 'name', value: 'test', type: 'string', description: 'Block name' }
+        ]
+    )
 
     // Drag state refs
     const dragStartRef = useRef({ x: 0, y: 0 })
     const blockStartRef = useRef({ x: 0, y: 0 })
     const isDraggingRef = useRef(false)
+    const clickCountRef = useRef(0)
+    const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     
     // Resize state refs
     const resizeStartRef = useRef({ x: 0, y: 0 })
@@ -96,6 +117,23 @@ export default function Block({
             y: svgPoint.y
         }
     }, [])
+
+    /**
+     * Handles parameter updates from the parameter dialog.
+     * @param newParameters Updated parameters array
+     */
+    const handleParameterUpdate = useCallback((newParameters: BlockParameter[]) => {
+        setBlockParameters(newParameters)
+        onParameterChange?.(id, newParameters)
+    }, [id, onParameterChange])
+
+    // /**
+    //  * Handles double-click to open parameter dialog.
+    //  */
+    // const handleDoubleClick = useCallback(() => {
+    //     setShowParameterDialog(true)
+    //     setSelected(true)
+    // }, [])
 
     /**
      * Calculates the position of input ports along the left edge of the block.
@@ -240,6 +278,11 @@ export default function Block({
             if (dragDistance > 3 && !isDraggingRef.current) {
                 isDraggingRef.current = true
                 setIsDragging(true)
+                // Cancel any pending click detection when dragging starts
+                if (clickTimeoutRef.current) {
+                    clearTimeout(clickTimeoutRef.current)
+                    clickCountRef.current = 0
+                }
             }
             
             // Update position during drag
@@ -253,12 +296,33 @@ export default function Block({
         }
 
         /**
-         * Handles mouse up event to finalize drag or toggle selection.
+         * Handles mouse up event to finalize drag or handle clicks.
          */
         const handleMouseUp = () => {
-            // Handle click vs drag
+            // Only handle clicks if we didn't drag
             if (!isDraggingRef.current) {
-                setSelected(prev => !prev)
+                clickCountRef.current++
+                
+                if (clickTimeoutRef.current) {
+                    clearTimeout(clickTimeoutRef.current)
+                }
+                
+                if (clickCountRef.current === 1) {
+                    // Wait to see if this becomes a double-click
+                    clickTimeoutRef.current = setTimeout(() => {
+                        // Single click confirmed
+                        setSelected(prev => !prev)
+                        clickCountRef.current = 0
+                    }, 250)
+                } else if (clickCountRef.current === 2) {
+                    // Double-click confirmed - open parameter dialog
+                    console.log('Double-click detected, opening dialog')
+                    console.log('Current blockParameters:', blockParameters)
+                    console.log('Current showParameterDialog:', showParameterDialog)
+                    setShowParameterDialog(true)
+                    // setSelected(true)
+                    clickCountRef.current = 0
+                }
             }
             
             // Clean up
@@ -273,139 +337,289 @@ export default function Block({
         document.addEventListener('mouseup', handleMouseUp)
     }, [position, getSVGMousePosition])
 
+    /**
+     * Handles double-click to open parameter dialog.
+     * This is kept as a fallback but the main logic is in handleMouseDown
+     */
+    const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation()
+        // This might not fire reliably in SVG, so we handle it in mousedown/mouseup
+    }, [])
+
     return (
-        <g
-            id={`${id}-group`}
-            transform={`translate(${position.x}, ${position.y})`}
-            onMouseEnter={() => !isDragging && !isResizing && setShowResizeHandles(true)}
-            onMouseLeave={() => !isDragging && !isResizing && setShowResizeHandles(false)}
-        >
-            {/* Shadow rectangle */}
-            <rect
-                className="block-shadow-rect"
-                fill="rgba(0, 0, 0, 0.3)"
-                stroke="none"
-                rx="2"
-                x={shadowOffset}
-                y={shadowOffset}
-                width={position.width}
-                height={position.height}
-            />
-
-            {/* Main block rectangle */}
-            <rect
-                className="rectangle block-shadow"
-                fill={blockStyle.fill}
-                stroke={blockStyle.stroke}
-                strokeWidth={blockStyle.strokeWidth}
-                rx="2"
-                x={0}
-                y={0}
-                width={position.width}
-                height={position.height}
-                style={{ 
-                    cursor: isDragging ? 'grabbing' : 'grab',
-                    userSelect: 'none'
-                }}
-                onMouseDown={handleMouseDown}
-            />
-
-            {/* Input ports */}
-            {Array.from({ length: inPorts }, (_, index) => {
-                const portPos = getInputPortPosition(index)
-                return (
-                    <Port
-                        key={`input-${index}`}
-                        blockId={id}
-                        portType="input"
-                        portIndex={index}
-                        x={portPos.x}
-                        y={portPos.y}
-                        size={blockStyle.portSize}
-                        onPortMouseDown={handlePortMouseDown}
-                    />
-                )
-            })}
-
-            {/* Output ports */}
-            {Array.from({ length: outPorts }, (_, index) => {
-                const portPos = getOutputPortPosition(index)
-                return (
-                    <Port
-                        key={`output-${index}`}
-                        blockId={id}
-                        portType="output"
-                        portIndex={index}
-                        x={portPos.x}
-                        y={portPos.y}
-                        size={blockStyle.portSize}
-                        onPortMouseDown={handlePortMouseDown}
-                    />
-                )
-            })}
-
-            {/* Block label */}
-            <text
-                x={position.width / 2}
-                y={position.height + 20}
-                textAnchor="middle"
-                fontSize="12"
-                fontFamily="sans-serif"
-                fill="gray"
-                style={{ userSelect: 'none', pointerEvents: 'none' }}
+        <>
+            <g
+                id={`${id}-group`}
+                transform={`translate(${position.x}, ${position.y})`}
+                onMouseEnter={() => !isDragging && !isResizing && setShowResizeHandles(true)}
+                onMouseLeave={() => !isDragging && !isResizing && setShowResizeHandles(false)}
             >
-                {id}
-            </text>
+                {/* Shadow rectangle */}
+                <rect
+                    className="block-shadow-rect"
+                    fill="rgba(0, 0, 0, 0.3)"
+                    stroke="none"
+                    rx="2"
+                    x={shadowOffset}
+                    y={shadowOffset}
+                    width={position.width}
+                    height={position.height}
+                />
 
-            {/* Resize handles */}
-            {showResizeHandles && !isDragging && !isResizing && (
-                <>
-                    {/* Top-left handle */}
-                    <rect
-                        x={-blockStyle.resizeCornerSize / 2}
-                        y={-blockStyle.resizeCornerSize / 2}
-                        width={blockStyle.resizeCornerSize}
-                        height={blockStyle.resizeCornerSize}
-                        fill="white"
-                        stroke="gray"
-                        style={{ cursor: 'nwse-resize' }}
-                        onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
-                    />
-                    {/* Top-right handle */}
-                    <rect
-                        x={position.width - blockStyle.resizeCornerSize / 2}
-                        y={-blockStyle.resizeCornerSize / 2}
-                        width={blockStyle.resizeCornerSize}
-                        height={blockStyle.resizeCornerSize}
-                        fill="white"
-                        stroke="gray"
-                        style={{ cursor: 'nesw-resize' }}
-                        onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
-                    />
-                    {/* Bottom-left handle */}
-                    <rect
-                        x={-blockStyle.resizeCornerSize / 2}
-                        y={position.height - blockStyle.resizeCornerSize / 2}
-                        width={blockStyle.resizeCornerSize}
-                        height={blockStyle.resizeCornerSize}
-                        fill="white"
-                        stroke="gray"
-                        style={{ cursor: 'nesw-resize' }}
-                        onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
-                    />
-                    {/* Bottom-right handle */}
-                    <rect
-                        x={position.width - blockStyle.resizeCornerSize / 2}
-                        y={position.height - blockStyle.resizeCornerSize / 2}
-                        width={blockStyle.resizeCornerSize}
-                        height={blockStyle.resizeCornerSize}
-                        fill="white"
-                        stroke="gray"
-                        style={{ cursor: 'nwse-resize' }}
-                        onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
-                    />
-                </>
+                {/* Main block rectangle */}
+                <rect
+                    className="rectangle block-shadow"
+                    fill={blockStyle.fill}
+                    stroke={blockStyle.stroke}
+                    strokeWidth={blockStyle.strokeWidth}
+                    rx="2"
+                    x={0}
+                    y={0}
+                    width={position.width}
+                    height={position.height}
+                    style={{ 
+                        cursor: isDragging ? 'grabbing' : 'grab',
+                        userSelect: 'none'
+                    }}
+                    onMouseDown={handleMouseDown}
+                    // onDoubleClick={handleDoubleClick}
+                />
+
+                {/* Block class name inside block */}
+                {blockClass && (
+                    <text
+                        x={position.width / 2}
+                        y={position.height / 2}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fontSize="10"
+                        fontFamily="sans-serif"
+                        fill="black"
+                        style={{ userSelect: 'none', pointerEvents: 'none' }}
+                    >
+                        {blockClass}
+                    </text>
+                )}
+
+                {/* Input ports */}
+                {Array.from({ length: inPorts }, (_, index) => {
+                    const portPos = getInputPortPosition(index)
+                    return (
+                        <Port
+                            key={`input-${index}`}
+                            blockId={id}
+                            portType="input"
+                            portIndex={index}
+                            x={portPos.x}
+                            y={portPos.y}
+                            size={blockStyle.portSize}
+                            onPortMouseDown={handlePortMouseDown}
+                        />
+                    )
+                })}
+
+                {/* Output ports */}
+                {Array.from({ length: outPorts }, (_, index) => {
+                    const portPos = getOutputPortPosition(index)
+                    return (
+                        <Port
+                            key={`output-${index}`}
+                            blockId={id}
+                            portType="output"
+                            portIndex={index}
+                            x={portPos.x}
+                            y={portPos.y}
+                            size={blockStyle.portSize}
+                            onPortMouseDown={handlePortMouseDown}
+                        />
+                    )
+                })}
+
+                {/* Block label */}
+                <text
+                    x={position.width / 2}
+                    y={position.height + 20}
+                    textAnchor="middle"
+                    fontSize="12"
+                    fontFamily="sans-serif"
+                    fill="gray"
+                    style={{ userSelect: 'none', pointerEvents: 'none' }}
+                >
+                    {id}
+                </text>
+
+                {/* Resize handles */}
+                {showResizeHandles && !isDragging && !isResizing && (
+                    <>
+                        {/* Top-left handle */}
+                        <rect
+                            x={-blockStyle.resizeCornerSize / 2}
+                            y={-blockStyle.resizeCornerSize / 2}
+                            width={blockStyle.resizeCornerSize}
+                            height={blockStyle.resizeCornerSize}
+                            fill="white"
+                            stroke="gray"
+                            style={{ cursor: 'nwse-resize' }}
+                            onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
+                        />
+                        {/* Top-right handle */}
+                        <rect
+                            x={position.width - blockStyle.resizeCornerSize / 2}
+                            y={-blockStyle.resizeCornerSize / 2}
+                            width={blockStyle.resizeCornerSize}
+                            height={blockStyle.resizeCornerSize}
+                            fill="white"
+                            stroke="gray"
+                            style={{ cursor: 'nesw-resize' }}
+                            onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
+                        />
+                        {/* Bottom-left handle */}
+                        <rect
+                            x={-blockStyle.resizeCornerSize / 2}
+                            y={position.height - blockStyle.resizeCornerSize / 2}
+                            width={blockStyle.resizeCornerSize}
+                            height={blockStyle.resizeCornerSize}
+                            fill="white"
+                            stroke="gray"
+                            style={{ cursor: 'nesw-resize' }}
+                            onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
+                        />
+                        {/* Bottom-right handle */}
+                        <rect
+                            x={position.width - blockStyle.resizeCornerSize / 2}
+                            y={position.height - blockStyle.resizeCornerSize / 2}
+                            width={blockStyle.resizeCornerSize}
+                            height={blockStyle.resizeCornerSize}
+                            fill="white"
+                            stroke="gray"
+                            style={{ cursor: 'nwse-resize' }}
+                            onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
+                        />
+                    </>
+                )}
+            </g>
+
+            {/* Parameter Dialog */}
+            {showParameterDialog && (
+                <ParameterDialog
+                    blockId={id}
+                    blockClass={blockClass}
+                    parameters={blockParameters}
+                    onParameterUpdate={handleParameterUpdate}
+                    onClose={() => setShowParameterDialog(false)}
+                />
             )}
-        </g>
+        </>
+    )
+}
+
+/**
+ * Parameter Dialog Component for editing block parameters
+ */
+interface ParameterDialogProps {
+    blockId: string
+    blockClass?: string
+    parameters: BlockParameter[]
+    onParameterUpdate: (parameters: BlockParameter[]) => void
+    onClose: () => void
+}
+
+function ParameterDialog({ 
+    blockId, 
+    blockClass, 
+    parameters, 
+    onParameterUpdate, 
+    onClose 
+}: ParameterDialogProps) {
+    const [localParameters, setLocalParameters] = useState<BlockParameter[]>(parameters)
+
+    const handleParameterChange = useCallback((index: number, field: keyof BlockParameter, value: any) => {
+        setLocalParameters(prev => 
+            prev.map((param, i) => 
+                i === index ? { ...param, [field]: value } : param
+            )
+        )
+    }, [])
+
+    const handleSave = useCallback(() => {
+        onParameterUpdate(localParameters)
+        onClose()
+    }, [localParameters, onParameterUpdate, onClose])
+
+    return (
+        <div style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: 'white',
+            border: '1px solid #ccc',
+            borderRadius: '8px',
+            padding: '20px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 1000,
+            minWidth: '300px'
+        }}>
+            <h3>Block Parameters: {blockId}</h3>
+            {blockClass && <p><strong>Type:</strong> {blockClass}</p>}
+            
+            <div style={{ marginBottom: '20px' }}>
+                {localParameters.map((param, index) => (
+                    <div key={param.name} style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            {param.name}
+                        </label>
+                        {param.description && (
+                            <p style={{ fontSize: '12px', color: '#666', margin: '0 0 5px 0' }}>
+                                {param.description}
+                            </p>
+                        )}
+                        {param.type === 'boolean' ? (
+                            <input
+                                type="checkbox"
+                                checked={param.value as boolean}
+                                onChange={(e) => handleParameterChange(index, 'value', e.target.checked)}
+                            />
+                        ) : (
+                            <input
+                                type={param.type === 'number' ? 'number' : 'text'}
+                                value={param.value}
+                                onChange={(e) => handleParameterChange(index, 'value', 
+                                    param.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value
+                                )}
+                                style={{
+                                    width: '100%',
+                                    padding: '5px',
+                                    border: '1px solid #ccc',
+                                    borderRadius: '4px'
+                                }}
+                            />
+                        )}
+                    </div>
+                ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button onClick={onClose} style={{
+                    padding: '8px 16px',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    backgroundColor: 'white',
+                    cursor: 'pointer'
+                }}>
+                    Cancel
+                </button>
+                <button onClick={handleSave} style={{
+                    padding: '8px 16px',
+                    border: 'none',
+                    borderRadius: '4px',
+                    backgroundColor: '#007bff',
+                    color: 'white',
+                    cursor: 'pointer'
+                }}>
+                    Save
+                </button>
+            </div>
+        </div>
     )
 }
