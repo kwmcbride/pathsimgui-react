@@ -25,7 +25,7 @@ interface BlockStyle {
 
 /**
  * Block component representing a draggable and selectable block on the canvas.
- * Handles mouse events for dragging and selection, and renders resize handles.
+ * Handles mouse events for dragging, selection, and resizing with corner handles.
  */
 export default function Block({
     id,
@@ -47,12 +47,18 @@ export default function Block({
     // State for selection and interaction
     const [selected, setSelected] = useState(false)
     const [isDragging, setIsDragging] = useState(false)
+    const [isResizing, setIsResizing] = useState(false)
     const [showResizeHandles, setShowResizeHandles] = useState(false)
 
     // Drag state refs
     const dragStartRef = useRef({ x: 0, y: 0 })
     const blockStartRef = useRef({ x: 0, y: 0 })
     const isDraggingRef = useRef(false)
+    
+    // Resize state refs
+    const resizeStartRef = useRef({ x: 0, y: 0 })
+    const initialSizeRef = useRef({ width: 0, height: 0 })
+    const resizeHandleRef = useRef<string>('')
 
     // Block styling
     const blockStyle: BlockStyle = {
@@ -87,6 +93,81 @@ export default function Block({
             y: svgPoint.y
         }
     }, [])
+
+    /**
+     * Handles resize handle mouse down event.
+     * @param e Mouse event
+     * @param handle Which handle was clicked ('nw', 'ne', 'sw', 'se')
+     */
+    const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
+        e.stopPropagation()
+        
+        const svgMousePos = getSVGMousePosition(e)
+        
+        // Store initial resize state
+        resizeStartRef.current = svgMousePos
+        initialSizeRef.current = { width: position.width, height: position.height }
+        resizeHandleRef.current = handle
+        setIsResizing(true)
+        // setSelected(true)
+        
+        // Mouse move handler for resizing
+        const handleResizeMove = (e: MouseEvent) => {
+            const currentMouse = getSVGMousePosition(e)
+            
+            const deltaX = currentMouse.x - resizeStartRef.current.x
+            const deltaY = currentMouse.y - resizeStartRef.current.y
+            
+            let newWidth = initialSizeRef.current.width
+            let newHeight = initialSizeRef.current.height
+            let newX = position.x
+            let newY = position.y
+            
+            // Apply resize based on which handle is being dragged
+            switch (handle) {
+                case 'nw': // Top-left
+                    newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
+                    newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
+                    newX = position.x + (initialSizeRef.current.width - newWidth)
+                    newY = position.y + (initialSizeRef.current.height - newHeight)
+                    break
+                case 'ne': // Top-right
+                    newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
+                    newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
+                    newY = position.y + (initialSizeRef.current.height - newHeight)
+                    break
+                case 'sw': // Bottom-left
+                    newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
+                    newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
+                    newX = position.x + (initialSizeRef.current.width - newWidth)
+                    break
+                case 'se': // Bottom-right
+                    newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
+                    newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
+                    break
+            }
+            
+            setPosition(prev => ({
+                ...prev,
+                x: newX,
+                y: newY,
+                width: newWidth,
+                height: newHeight
+            }))
+        }
+        
+        // Mouse up handler for resizing
+        const handleResizeUp = () => {
+            setIsResizing(false)
+            resizeHandleRef.current = ''
+            document.removeEventListener('mousemove', handleResizeMove)
+            document.removeEventListener('mouseup', handleResizeUp)
+        }
+        
+        // Attach global listeners
+        document.addEventListener('mousemove', handleResizeMove)
+        document.addEventListener('mouseup', handleResizeUp)
+    }, [position, getSVGMousePosition])
 
     /**
      * Handles mouse down event to initiate drag or selection.
@@ -152,8 +233,8 @@ export default function Block({
         <g
             id={`${id}-group`}
             transform={`translate(${position.x}, ${position.y})`}
-            onMouseEnter={() => !isDragging && setShowResizeHandles(true)}
-            onMouseLeave={() => !isDragging && setShowResizeHandles(false)}
+            onMouseEnter={() => !isDragging && !isResizing && setShowResizeHandles(true)}
+            onMouseLeave={() => !isDragging && !isResizing && setShowResizeHandles(false)}
         >
             {/* Shadow rectangle */}
             <rect
@@ -199,8 +280,9 @@ export default function Block({
             </text>
 
             {/* Resize handles */}
-            {showResizeHandles && !isDragging && (
+            {showResizeHandles && !isDragging && !isResizing && (
                 <>
+                    {/* Top-left handle */}
                     <rect
                         x={-blockStyle.resizeCornerSize / 2}
                         y={-blockStyle.resizeCornerSize / 2}
@@ -209,25 +291,9 @@ export default function Block({
                         fill="white"
                         stroke="gray"
                         style={{ cursor: 'nwse-resize' }}
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
                     />
-                    <rect
-                        x={position.width - blockStyle.resizeCornerSize / 2}
-                        y={position.height - blockStyle.resizeCornerSize / 2}
-                        width={blockStyle.resizeCornerSize}
-                        height={blockStyle.resizeCornerSize}
-                        fill="white"
-                        stroke="gray"
-                        style={{ cursor: 'nwse-resize' }}
-                    />
-                    <rect
-                        x={-blockStyle.resizeCornerSize / 2}
-                        y={position.height - blockStyle.resizeCornerSize / 2}
-                        width={blockStyle.resizeCornerSize}
-                        height={blockStyle.resizeCornerSize}
-                        fill="white"
-                        stroke="gray"
-                        style={{ cursor: 'nesw-resize' }}
-                    />
+                    {/* Top-right handle */}
                     <rect
                         x={position.width - blockStyle.resizeCornerSize / 2}
                         y={-blockStyle.resizeCornerSize / 2}
@@ -236,6 +302,29 @@ export default function Block({
                         fill="white"
                         stroke="gray"
                         style={{ cursor: 'nesw-resize' }}
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
+                    />
+                    {/* Bottom-left handle */}
+                    <rect
+                        x={-blockStyle.resizeCornerSize / 2}
+                        y={position.height - blockStyle.resizeCornerSize / 2}
+                        width={blockStyle.resizeCornerSize}
+                        height={blockStyle.resizeCornerSize}
+                        fill="white"
+                        stroke="gray"
+                        style={{ cursor: 'nesw-resize' }}
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
+                    />
+                    {/* Bottom-right handle */}
+                    <rect
+                        x={position.width - blockStyle.resizeCornerSize / 2}
+                        y={position.height - blockStyle.resizeCornerSize / 2}
+                        width={blockStyle.resizeCornerSize}
+                        height={blockStyle.resizeCornerSize}
+                        fill="white"
+                        stroke="gray"
+                        style={{ cursor: 'nwse-resize' }}
+                        onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
                     />
                 </>
             )}
