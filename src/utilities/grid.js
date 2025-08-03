@@ -10,3 +10,4 @@ export const GRID_SIZE = 5; // Default grid size
 export function snapToGrid(rawPosition, gridSize = GRID_SIZE) {
     return Math.round(rawPosition / gridSize) * gridSize;
 }
+

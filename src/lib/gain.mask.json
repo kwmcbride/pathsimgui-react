@@ -36,7 +36,7 @@
     },
     "sizing": {
         "minWidth": 40,
-        "minHeight": 30,
+        "minHeight": 40,
         "defaultWidth": 60,
         "defaultHeight": 40,
         "maintainAspectRatio": false

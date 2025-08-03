@@ -19,7 +19,7 @@ export default function Port({
     portIndex,
     x,
     y,
-    size = 8,
+    size = 5,
     onPortMouseDown
 }: PortProps) {
     const handleMouseDown = useCallback((e: React.MouseEvent) => {

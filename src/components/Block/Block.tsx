@@ -1,7 +1,8 @@
-import React, { useState, useRef, useCallback, useEffect, memo } from 'react'
+import React, { useState, useRef, useCallback, useEffect, memo, useMemo } from 'react'
 import Port from '../Port/Port'
 import Mask from '../Mask/Mask'
 import { blockConfigManager, BlockConfiguration } from '../../lib/BlockConfigManager'
+import { snapToGrid, GRID_SIZE } from '../../utilities/grid'
 
 /**
  * Represents the position and size of a block on the canvas.
@@ -32,9 +33,16 @@ interface BlockProps {
     position?: Partial<Position>
     isPreview?: boolean
     parameters?: BlockParameter[]
+    selected?: boolean
+    selectedBlocks?: Set<string> // Add this
+    allBlocks?: BlockData[] // Add this
     onParameterChange?: (blockId: string, parameters: BlockParameter[]) => void
     onPositionChange?: (blockId: string, position: Position) => void
+    onGroupMove?: (deltas: Record<string, { deltaX: number, deltaY: number }>) => void // Add this
     onContextMenu?: (blockId: string, x: number, y: number) => void
+    onSelect?: (blockId: string, isSelected: boolean, multiSelect?: boolean) => void
+    onDragStart?: () => void
+    onDragEnd?: () => void
 }
 
 /**
@@ -48,6 +56,8 @@ interface BlockStyle {
     portSize: number
 }
 
+
+
 /**
  * Block component representing a draggable, configurable block on the canvas.
  * Handles rendering, selection, dragging, resizing, and parameter editing.
@@ -58,14 +68,47 @@ function Block({
     position: initialPosition = {},
     isPreview = false,
     parameters = [],
+    selected = false,
+    selectedBlocks,
+    allBlocks,
     onParameterChange,
     onPositionChange,
-    onContextMenu
+    onGroupMove,
+    onContextMenu,
+    onSelect,
+    onDragStart,
+    onDragEnd
 }: BlockProps) {
     // State hooks, these need to be at the top
     
     // Block configuration loaded from JSON
     const [blockConfig, setBlockConfig] = useState<BlockConfiguration | null>(null)
+
+// Replace lines 98-115 and 167-185 (consolidate into one useEffect)
+
+    // useEffect(() => {
+    //     const loadConfig = async () => {
+    //         try {
+    //             setLoading(true)
+    //             const config = await blockConfigManager.loadBlockConfig(blockType)
+    //             setBlockConfig(config)
+                
+    //             // If no parameters provided, use defaults from config
+    //             if (parameters.length === 0 && config) {
+    //                 const defaultParams = blockConfigManager.createDefaultParameters(blockType)
+    //                 setBlockParameters(defaultParams)
+    //             }
+    //         } catch (error) {
+    //             console.error(`Failed to load configuration for ${blockType}:`, error)
+    //         } finally {
+    //             setLoading(false)
+    //         }
+    //     }
+        
+    //     loadConfig()
+    // }, [blockType, parameters.length])
+
+
 
     // Loading state for async config fetch
     const [loading, setLoading] = useState(true)
@@ -82,8 +125,9 @@ function Block({
         return initialPos
     })
 
+
     // State for selection and interaction
-    const [selected, setSelected] = useState(false)
+    // const [selected, setSelected] = useState(false)
     const [isDragging, setIsDragging] = useState(false)
     const [isResizing, setIsResizing] = useState(false)
     const [showResizeHandles, setShowResizeHandles] = useState(false)
@@ -105,11 +149,13 @@ function Block({
     const isDraggingRef = useRef(false)
     const clickCountRef = useRef(0)
     const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
     const resizeStartRef = useRef({ x: 0, y: 0 })
     const initialSizeRef = useRef({ width: 0, height: 0 })
     const resizeHandleRef = useRef<string>('')
+    const isResizingRef = useRef(false)  // Add this line
 
-    
+    const initialPositionRef = useRef({ x: 0, y: 0 })
     // Effects to load block configuration - might not be necessary if config is static
     /**
      * Loads block configuration from JSON when blockType changes.
@@ -136,6 +182,30 @@ function Block({
         
         loadConfig()
     }, [blockType, parameters.length])
+
+// Replace the position sync effect with this version that uses a different approach
+
+useEffect(() => {
+    console.log('Position sync effect running');
+    
+    // Skip position sync entirely if we're currently resizing (using ref for immediate check)
+    if (isResizingRef.current) {
+        console.log('Skipping position sync - currently resizing via ref');
+        return;
+    }
+    
+    // Only sync if we have valid position data
+    if (initialPosition.x !== undefined && initialPosition.y !== undefined) {
+        console.log('Syncing position from props:', initialPosition);
+        setPosition(prev => ({
+            ...prev,
+            x: initialPosition.x,
+            y: initialPosition.y,
+            width: initialPosition.width ?? prev.width,
+            height: initialPosition.height ?? prev.height
+        }))
+    }
+}, [initialPosition.x, initialPosition.y, initialPosition.width, initialPosition.height])
 
     /**
      * Updates block size to match config defaults if not set in initialPosition.
@@ -179,20 +249,75 @@ function Block({
      * Converts mouse event coordinates to SVG coordinates.
      */
     const getSVGMousePosition = useCallback((e: React.MouseEvent | MouseEvent) => {
-        const svg = (e.target as SVGElement).ownerSVGElement
+        // Get the SVG element - try multiple approaches
+        let svg: SVGSVGElement | null = null
+        
+        // For React events, try the standard approach
+        if ('currentTarget' in e) {
+            const target = e.target as SVGElement
+            svg = target.ownerSVGElement
+        }
+        
+        // For DOM events or if the above failed, find the SVG element
+        if (!svg) {
+            svg = document.querySelector('svg') as SVGSVGElement
+        }
+        
         if (!svg) return { x: 0, y: 0 }
         
         const point = svg.createSVGPoint()
         point.x = e.clientX
         point.y = e.clientY
         
-        const svgPoint = point.matrixTransform(svg.getScreenCTM()?.inverse())
-        
-        return {
-            x: svgPoint.x,
-            y: svgPoint.y
+        try {
+            const svgPoint = point.matrixTransform(svg.getScreenCTM()?.inverse())
+            return {
+                x: svgPoint.x,
+                y: svgPoint.y
+            }
+        } catch (error) {
+            console.error('Error converting mouse coordinates:', error)
+            return { x: 0, y: 0 }
         }
     }, [])
+
+
+    const calculateInputPortPosition = useCallback((index: number, totalPorts: number) => {
+        if (totalPorts === 0) return { x: 0, y: 0 }
+        
+        // Divide height into equal sections and place ports in the center of each section
+        const sectionHeight = position.height / totalPorts
+        const baseY = sectionHeight * (index + 0.5) // +0.5 to center in the section
+        
+        return {
+            x: 0, // Left side of block
+            y: snapToGrid(baseY, GRID_SIZE) // Snap to grid
+        }
+    }, [position.height])
+
+    const calculateOutputPortPosition = useCallback((index: number, totalPorts: number) => {
+        if (totalPorts === 0) return { x: 0, y: 0 }
+        
+        // Divide height into equal sections and place ports in the center of each section
+        const sectionHeight = position.height / totalPorts
+        const baseY = sectionHeight * (index + 0.5) // +0.5 to center in the section
+        
+        return {
+            x: position.width, // Right side of block
+            y: snapToGrid(baseY, GRID_SIZE) // Snap to grid
+        }
+    }, [position.width, position.height])
+
+    // If you have parameter ports or other port types, update them similarly:
+    // const calculateParameterPortPosition = useCallback((index: number, totalPorts: number) => {
+    //     const spacing = totalPorts > 1 ? (position.width - 20) / (totalPorts - 1) : 0
+    //     const baseX = 10 + index * spacing
+        
+    //     return {
+    //         x: snapToGrid(baseX, GRID_SIZE), // Snap to grid
+    //         y: 0 // Top of block
+    //     }
+    // }, [position.width])
 
     /**
      * Handles updates to block parameters from the parameter dialog.
@@ -202,33 +327,6 @@ function Block({
         onParameterChange?.(id, newParameters)
     }, [id, onParameterChange])
 
-    /**
-     * Calculates the position of an input port.
-     */
-    const getInputPortPosition = useCallback((portIndex: number) => {
-        const inPorts = blockConfig?.ports.inputs || 0
-        if (inPorts === 0) return { x: 0, y: 0 }
-        
-        const portSpacing = position.height / (inPorts + 1)
-        return {
-            x: 0,
-            y: portSpacing * (portIndex + 1)
-        }
-    }, [position.height, blockConfig?.ports.inputs])
-
-    /**
-     * Calculates the position of an output port.
-     */
-    const getOutputPortPosition = useCallback((portIndex: number) => {
-        const outPorts = blockConfig?.ports.outputs || 0
-        if (outPorts === 0) return { x: 0, y: 0 }
-        
-        const portSpacing = position.height / (outPorts + 1)
-        return {
-            x: position.width,
-            y: portSpacing * (portIndex + 1)
-        }
-    }, [position.width, position.height, blockConfig?.ports.outputs])
 
     /**
      * Handles mouse down on a port (for connection logic).
@@ -242,76 +340,204 @@ function Block({
         console.log(`Port clicked: ${portType} port ${portIndex} on block ${blockId}`)
     }, [])
 
+
+    // Create stable resize move handler
+    const handleResizeMove = useCallback((e: MouseEvent) => {
+        console.log('handleResizeMove called, handle:', resizeHandleRef.current);
+    
+        if (!resizeHandleRef.current) {
+            console.log('No resize handle set, returning');
+            return;
+        }
+        
+        const currentMouse = getSVGMousePosition(e);
+        console.log('Current mouse position:', currentMouse);
+        const handle = resizeHandleRef.current;
+        
+        const deltaX = currentMouse.x - resizeStartRef.current.x;
+        const deltaY = currentMouse.y - resizeStartRef.current.y;
+        
+        let newWidth = initialSizeRef.current.width;
+        let newHeight = initialSizeRef.current.height;
+        let newX = initialPositionRef.current.x;
+        let newY = initialPositionRef.current.y;
+        
+        switch (handle) {
+            case 'nw':
+                newWidth = Math.max(50, initialSizeRef.current.width - deltaX);
+                newHeight = Math.max(30, initialSizeRef.current.height - deltaY);
+                newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth);
+                newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight);
+                break;
+            case 'ne':
+                newWidth = Math.max(50, initialSizeRef.current.width + deltaX);
+                newHeight = Math.max(30, initialSizeRef.current.height - deltaY);
+                newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight);
+                break;
+            case 'sw':
+                newWidth = Math.max(50, initialSizeRef.current.width - deltaX);
+                newHeight = Math.max(30, initialSizeRef.current.height + deltaY);
+                newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth);
+                break;
+            case 'se':
+                newWidth = Math.max(50, initialSizeRef.current.width + deltaX);
+                newHeight = Math.max(30, initialSizeRef.current.height + deltaY);
+                break;
+        }
+
+        onPositionChange?.(id, {
+    x: newX,
+    y: newY,
+    width: newWidth,
+    height: newHeight
+});
+        
+        setPosition(currentPosition => {
+            const newPosition = {
+                x: newX,
+                y: newY,
+                width: newWidth,
+                height: newHeight
+            };
+            
+            // Force re-render by ensuring we return a new object
+            // Check if values actually changed
+            if (currentPosition.x === newPosition.x && 
+                currentPosition.y === newPosition.y && 
+                currentPosition.width === newPosition.width && 
+                currentPosition.height === newPosition.height) {
+                // Values are the same, but still return new object to force re-render
+                return { ...newPosition };
+            }
+            
+            console.log('Setting new position:', newPosition);
+            console.log('Previous position was:', currentPosition);
+            return newPosition;
+        });
+
+        console.log('Setting new position:', { x: newX, y: newY, width: newWidth, height: newHeight });
+    }, [getSVGMousePosition]);
+
+    const handleResizeUp = useCallback(() => {
+        console.log('handleResizeUp called, isResizingRef was:', isResizingRef.current);
+        isResizingRef.current = false;  // Clear ref IMMEDIATELY
+        console.log('handleResizeUp set isResizingRef to:', isResizingRef.current);
+        setIsResizing(false)
+        resizeHandleRef.current = ''
+        onDragEnd?.()
+        
+        // Get the CURRENT position from the component state, not the closure
+        setPosition(currentPosition => {
+            const finalPosition = {
+                x: snapToGrid(currentPosition.x, GRID_SIZE),
+                y: snapToGrid(currentPosition.y, GRID_SIZE),
+                width: snapToGrid(currentPosition.width, GRID_SIZE),
+                height: snapToGrid(currentPosition.height, GRID_SIZE)
+            }
+            
+            // Notify Canvas once at the end
+            onPositionChange?.(id, finalPosition)
+            
+            return finalPosition
+        })
+        
+        document.removeEventListener('mousemove', handleResizeMove)
+        document.removeEventListener('mouseup', handleResizeUp)
+    }, [id, onPositionChange, onDragEnd])
+
     /**
      * Handles mouse down on a resize handle.
      * Initiates resizing logic for the block.
      */
     const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
-        e.stopPropagation()
+        console.log('handleResizeMouseDown called with handle:', handle);
+        e.stopPropagation();
+        e.preventDefault();
         
-        const svgMousePos = getSVGMousePosition(e)
+        // Set BOTH ref AND state to ensure effect sees the change
+        isResizingRef.current = true;
+        setIsResizing(true);
+        console.log('Set isResizingRef.current to:', isResizingRef.current, 'and isResizing state to: true');
         
-        resizeStartRef.current = svgMousePos
-        initialSizeRef.current = { width: position.width, height: position.height }
-        resizeHandleRef.current = handle
-        setIsResizing(true)
+        const svgMousePos = getSVGMousePosition(e);
+        console.log('Initial SVG position:', svgMousePos);
+        
+        resizeStartRef.current = svgMousePos;
+        initialSizeRef.current = { width: position.width, height: position.height };
+        initialPositionRef.current = { x: position.x, y: position.y };
+        resizeHandleRef.current = handle;
+        onDragStart?.();
+        
+        console.log('Adding event listeners for resize');
+        document.addEventListener('mousemove', handleResizeMove);
+        document.addEventListener('mouseup', handleResizeUp);
+    }, [position, getSVGMousePosition, onDragStart]);
+
+    // const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
+    //     e.stopPropagation()
+        
+    //     const svgMousePos = getSVGMousePosition(e)
+
+    //     resizeStartRef.current = svgMousePos
+    //     initialSizeRef.current = { width: position.width, height: position.height }
+    //     initialPositionRef.current = { x: position.x, y: position.y } // Use the ref
+    //     resizeHandleRef.current = handle
+    //     setIsResizing(true)
+    //     onDragStart?.()
         
         // Mouse move handler for resizing
-        const handleResizeMove = (e: MouseEvent) => {
-            const currentMouse = getSVGMousePosition(e)
+        // const handleResizeMove = (e: MouseEvent) => {
+        //     const currentMouse = getSVGMousePosition(e)
             
-            const deltaX = currentMouse.x - resizeStartRef.current.x
-            const deltaY = currentMouse.y - resizeStartRef.current.y
+        //     const deltaX = currentMouse.x - resizeStartRef.current.x
+        //     const deltaY = currentMouse.y - resizeStartRef.current.y
             
-            let newWidth = initialSizeRef.current.width
-            let newHeight = initialSizeRef.current.height
-            let newX = position.x
-            let newY = position.y
+        //     let newWidth = initialSizeRef.current.width
+        //     let newHeight = initialSizeRef.current.height
+        //     let newX = initialPositionRef.current.x  // Use ref.current
+        //     let newY = initialPositionRef.current.y  // Use ref.current
+                        
+        //     switch (handle) {
+        //         case 'nw':
+        //             newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
+        //             newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
+        //             newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth)
+        //             newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight)
+        //             break
+        //         case 'ne':
+        //             newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
+        //             newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
+        //             newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight)
+        //             // newX stays initialPositionRef.current.x
+        //             break
+        //         case 'sw':
+        //             newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
+        //             newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
+        //             newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth)
+        //             // newY stays initialPositionRef.current.y
+        //             break
+        //         case 'se':
+        //             newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
+        //             newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
+        //             // Both newX and newY stay as initialPositionRef.current values
+        //             break
+        //     }
             
-            switch (handle) {
-                case 'nw':
-                    newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
-                    newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
-                    newX = position.x + (initialSizeRef.current.width - newWidth)
-                    newY = position.y + (initialSizeRef.current.height - newHeight)
-                    break
-                case 'ne':
-                    newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
-                    newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
-                    newY = position.y + (initialSizeRef.current.height - newHeight)
-                    break
-                case 'sw':
-                    newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
-                    newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
-                    newX = position.x + (initialSizeRef.current.width - newWidth)
-                    break
-                case 'se':
-                    newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
-                    newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
-                    break
-            }
-            
-            const newPosition = {
-                ...position,
-                x: newX,
-                y: newY,
-                width: newWidth,
-                height: newHeight
-            }
-            handlePositionChange(newPosition)
-        }
+        //     // Update ONLY the internal position - do NOT notify Canvas during resize
+        //     setPosition({
+        //         x: newX,
+        //         y: newY,
+        //         width: newWidth,
+        //         height: newHeight
+        //     })
+        // }
+
         
-        // Mouse up handler for resizing
-        const handleResizeUp = () => {
-            setIsResizing(false)
-            resizeHandleRef.current = ''
-            document.removeEventListener('mousemove', handleResizeMove)
-            document.removeEventListener('mouseup', handleResizeUp)
-        }
         
-        document.addEventListener('mousemove', handleResizeMove)
-        document.addEventListener('mouseup', handleResizeUp)
-    }, [position, getSVGMousePosition])
+        // Add mouse move and up listeners to document    
+    //     document.addEventListener('mousemove', handleResizeMove)
+    //     document.addEventListener('mouseup', handleResizeUp)
+    // }, [position, getSVGMousePosition, onDragStart, onDragEnd, handlePositionChange])
 
     /**
      * Handles mouse down on the block for drag, selection, and double-click.
@@ -329,6 +555,9 @@ function Block({
             blockStartRef.current = { x: position.x, y: position.y }
             isDraggingRef.current = false
 
+            // Check for multi-select (Ctrl/Cmd key)
+            const multiSelect = e.ctrlKey || e.metaKey
+
             // Mouse move handler for dragging
             const handleMouseMove = (e: MouseEvent) => {
                 const currentMouse = getSVGMousePosition(e)
@@ -340,14 +569,23 @@ function Block({
                 if (dragDistance > 3 && !isDraggingRef.current) {
                     isDraggingRef.current = true
                     setIsDragging(true)
+                    onDragStart?.() // ADD THIS LINE - call when drag starts
+
+                    // If this block isn't selected, select it
+                    if (!selected && onSelect) {
+                        onSelect(id, true, false)
+                    }
+
                     // Cancel click detection if drag starts
                     if (clickTimeoutRef.current) {
                         clearTimeout(clickTimeoutRef.current)
                         clickCountRef.current = 0
                     }
                 }
-                // If dragging, update position
+                
+                // If dragging, handle group movement
                 if (isDraggingRef.current) {
+                    // Always use the Canvas position handler - it will handle group movement
                     const newPosition = {
                         ...position,
                         x: blockStartRef.current.x + deltaX,
@@ -371,7 +609,10 @@ function Block({
                     if (clickCountRef.current === 1) {
                         // Wait to see if this becomes a double-click
                         clickTimeoutRef.current = setTimeout(() => {
-                            setSelected(prev => !prev)
+                            // Toggle selection with proper multi-select handling
+                            if (onSelect) {
+                                onSelect(id, !selected, multiSelect)
+                            }
                             clickCountRef.current = 0
                         }, 250)
                     } else if (clickCountRef.current === 2) {
@@ -380,9 +621,11 @@ function Block({
                         console.log('Current blockParameters:', blockParameters)
                         console.log('Current showParameterDialog:', showParameterDialog)
                         setShowParameterDialog(true)
-                        // setSelected(true)
                         clickCountRef.current = 0
                     }
+                } else {
+                    // Dragging just ended - notify Canvas to reset group drag
+                    onDragEnd?.()
                 }
                 
                 setIsDragging(false)
@@ -473,7 +716,7 @@ function Block({
             document.addEventListener('mousemove', handleRightMouseMove)
             document.addEventListener('mouseup', handleRightMouseUp)
         }
-    }, [position, getSVGMousePosition, id, blockType, onContextMenu])
+    }, [position, getSVGMousePosition, id, blockType, onContextMenu, selected, onSelect, onDragStart, onDragEnd])
     /**
      * Handle context menu event - prevent default to avoid browser menu
      */
@@ -520,6 +763,8 @@ function Block({
         )
     }
 
+    
+    console.log('Rendering with position:', position);
     // Main Render
     return (
         <>
@@ -550,7 +795,7 @@ function Block({
 
                 {/* Input ports */}
                 {Array.from({ length: blockConfig.ports.inputs }, (_, index) => {
-                    const portPos = getInputPortPosition(index)
+                    const portPos = calculateInputPortPosition(index, blockConfig.ports.inputs)
                     return (
                         <Port
                             key={`input-${index}`}
@@ -567,7 +812,7 @@ function Block({
 
                 {/* Output ports */}
                 {Array.from({ length: blockConfig.ports.outputs }, (_, index) => {
-                    const portPos = getOutputPortPosition(index)
+                    const portPos = calculateOutputPortPosition(index, blockConfig.ports.outputs)
                     return (
                         <Port
                             key={`output-${index}`}
