@@ -1,5 +1,6 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect, memo } from 'react'
 import Port from '../Port/Port'
+import Mask from '../Mask/Mask'
 import { blockConfigManager, BlockConfiguration } from '../../lib/BlockConfigManager'
 
 /**
@@ -32,6 +33,8 @@ interface BlockProps {
     isPreview?: boolean
     parameters?: BlockParameter[]
     onParameterChange?: (blockId: string, parameters: BlockParameter[]) => void
+    onPositionChange?: (blockId: string, position: Position) => void
+    onContextMenu?: (blockId: string, x: number, y: number) => void
 }
 
 /**
@@ -49,13 +52,15 @@ interface BlockStyle {
  * Block component representing a draggable, configurable block on the canvas.
  * Handles rendering, selection, dragging, resizing, and parameter editing.
  */
-export default function Block({
+function Block({
     id,
     blockType,
     position: initialPosition = {},
     isPreview = false,
     parameters = [],
-    onParameterChange
+    onParameterChange,
+    onPositionChange,
+    onContextMenu
 }: BlockProps) {
     // State hooks, these need to be at the top
     
@@ -66,12 +71,15 @@ export default function Block({
     const [loading, setLoading] = useState(true)
     
     // Position and size of the block
-    const [position, setPosition] = useState<Position>({
-        x: 50,
-        y: 50,
-        width: 100,
-        height: 100,
-        ...initialPosition
+    const [position, setPosition] = useState<Position>(() => {
+        // Initialize with provided position, or defaults if not provided
+        const initialPos = {
+            x: initialPosition.x ?? 50,
+            y: initialPosition.y ?? 50,
+            width: initialPosition.width ?? 100,  // Use provided width if available
+            height: initialPosition.height ?? 100  // Use provided height if available
+        }
+        return initialPos
     })
 
     // State for selection and interaction
@@ -101,6 +109,7 @@ export default function Block({
     const initialSizeRef = useRef({ width: 0, height: 0 })
     const resizeHandleRef = useRef<string>('')
 
+    
     // Effects to load block configuration - might not be necessary if config is static
     /**
      * Loads block configuration from JSON when blockType changes.
@@ -132,16 +141,39 @@ export default function Block({
      * Updates block size to match config defaults if not set in initialPosition.
      */
     useEffect(() => {
-        if (blockConfig && !initialPosition.width && !initialPosition.height) {
+        if (blockConfig && initialPosition.width === undefined && initialPosition.height === undefined) {
+            // Only set default size from config if no size was provided in props
             setPosition(prev => ({
                 ...prev,
                 width: blockConfig.styling.defaultSize.width,
                 height: blockConfig.styling.defaultSize.height
             }))
         }
-    }, [blockConfig, initialPosition.width, initialPosition.height])
+    }, [blockConfig]) // Remove initialPosition dependencies to prevent overwriting
+
+    /**
+     * Cleanup effect to remove any event listeners when the component unmounts.
+     */
+    useEffect(() => {
+        return () => {
+            // Cleanup any remaining click timeouts
+            if (clickTimeoutRef.current) {
+                clearTimeout(clickTimeoutRef.current)
+            }
+        }
+    }, [])
+
 
     // All callbacks
+
+    /**
+     * Handle position/size changes and notify parent
+     */
+    const handlePositionChange = useCallback((newPosition: Position) => {
+        setPosition(newPosition)
+        // Notify parent component of position/size changes
+        onPositionChange?.(id, newPosition)
+    }, [id, onPositionChange])
 
     /**
      * Converts mouse event coordinates to SVG coordinates.
@@ -259,13 +291,14 @@ export default function Block({
                     break
             }
             
-            setPosition(prev => ({
-                ...prev,
+            const newPosition = {
+                ...position,
                 x: newX,
                 y: newY,
                 width: newWidth,
                 height: newHeight
-            }))
+            }
+            handlePositionChange(newPosition)
         }
         
         // Mouse up handler for resizing
@@ -285,78 +318,170 @@ export default function Block({
      * Implements custom double-click detection to avoid React SVG event issues.
      */
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
-        e.stopPropagation()
         
-        const svgMousePos = getSVGMousePosition(e)
+        if (e.button === 0) {
+            e.preventDefault()
+            e.stopPropagation()
+
+            const svgMousePos = getSVGMousePosition(e)
         
-        dragStartRef.current = svgMousePos
-        blockStartRef.current = { x: position.x, y: position.y }
-        isDraggingRef.current = false
-
-        // Mouse move handler for dragging
-        const handleMouseMove = (e: MouseEvent) => {
-            const currentMouse = getSVGMousePosition(e)
-            
-            const deltaX = currentMouse.x - dragStartRef.current.x
-            const deltaY = currentMouse.y - dragStartRef.current.y
-            
-            const dragDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
-            if (dragDistance > 3 && !isDraggingRef.current) {
-                isDraggingRef.current = true
-                setIsDragging(true)
-                // Cancel click detection if drag starts
-                if (clickTimeoutRef.current) {
-                    clearTimeout(clickTimeoutRef.current)
-                    clickCountRef.current = 0
-                }
-            }
-            
-            if (isDraggingRef.current) {
-                setPosition(prev => ({
-                    ...prev,
-                    x: blockStartRef.current.x + deltaX,
-                    y: blockStartRef.current.y + deltaY
-                }))
-            }
-        }
-
-        /**
-         * Handles mouse up to finalize drag or handle single/double click.
-         */
-        const handleMouseUp = () => {
-            if (!isDraggingRef.current) {
-                clickCountRef.current++
-                
-                if (clickTimeoutRef.current) {
-                    clearTimeout(clickTimeoutRef.current)
-                }
-                
-                if (clickCountRef.current === 1) {
-                    // Wait to see if this becomes a double-click
-                    clickTimeoutRef.current = setTimeout(() => {
-                        setSelected(prev => !prev)
-                        clickCountRef.current = 0
-                    }, 250)
-                } else if (clickCountRef.current === 2) {
-                    // Double-click confirmed - add logging back
-                    console.log('Double-click detected, opening dialog')
-                    console.log('Current blockParameters:', blockParameters)
-                    console.log('Current showParameterDialog:', showParameterDialog)
-                    setShowParameterDialog(true)
-                    // setSelected(true)
-                    clickCountRef.current = 0
-                }
-            }
-            
-            setIsDragging(false)
+            dragStartRef.current = svgMousePos
+            blockStartRef.current = { x: position.x, y: position.y }
             isDraggingRef.current = false
-            document.removeEventListener('mousemove', handleMouseMove)
-            document.removeEventListener('mouseup', handleMouseUp)
-        }
 
-        document.addEventListener('mousemove', handleMouseMove)
-        document.addEventListener('mouseup', handleMouseUp)
-    }, [position, getSVGMousePosition])
+            // Mouse move handler for dragging
+            const handleMouseMove = (e: MouseEvent) => {
+                const currentMouse = getSVGMousePosition(e)
+                
+                const deltaX = currentMouse.x - dragStartRef.current.x
+                const deltaY = currentMouse.y - dragStartRef.current.y
+                
+                const dragDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+                if (dragDistance > 3 && !isDraggingRef.current) {
+                    isDraggingRef.current = true
+                    setIsDragging(true)
+                    // Cancel click detection if drag starts
+                    if (clickTimeoutRef.current) {
+                        clearTimeout(clickTimeoutRef.current)
+                        clickCountRef.current = 0
+                    }
+                }
+                // If dragging, update position
+                if (isDraggingRef.current) {
+                    const newPosition = {
+                        ...position,
+                        x: blockStartRef.current.x + deltaX,
+                        y: blockStartRef.current.y + deltaY
+                    }
+                    handlePositionChange(newPosition)
+                }
+            }
+
+            /**
+             * Handles mouse up to finalize drag or handle single/double click.
+             */
+            const handleMouseUp = () => {
+                if (!isDraggingRef.current) {
+                    clickCountRef.current++
+                    
+                    if (clickTimeoutRef.current) {
+                        clearTimeout(clickTimeoutRef.current)
+                    }
+                    
+                    if (clickCountRef.current === 1) {
+                        // Wait to see if this becomes a double-click
+                        clickTimeoutRef.current = setTimeout(() => {
+                            setSelected(prev => !prev)
+                            clickCountRef.current = 0
+                        }, 250)
+                    } else if (clickCountRef.current === 2) {
+                        // Double-click confirmed - add logging back
+                        console.log('Double-click detected, opening dialog')
+                        console.log('Current blockParameters:', blockParameters)
+                        console.log('Current showParameterDialog:', showParameterDialog)
+                        setShowParameterDialog(true)
+                        // setSelected(true)
+                        clickCountRef.current = 0
+                    }
+                }
+                
+                setIsDragging(false)
+                isDraggingRef.current = false
+                document.removeEventListener('mousemove', handleMouseMove)
+                document.removeEventListener('mouseup', handleMouseUp)
+            }
+
+            document.addEventListener('mousemove', handleMouseMove)
+            document.addEventListener('mouseup', handleMouseUp)
+        }
+        else if (e.button === 2) {
+            e.preventDefault()
+            e.stopPropagation()
+            
+            const svgPoint = getSVGMousePosition(e)
+            const startPoint = { x: svgPoint.x, y: svgPoint.y }
+            const newDuplicateId = `${blockType.toLowerCase()}_${Date.now()}`
+            
+            let duplicateElement: SVGGElement | null = null
+            let dragThresholdMet = false
+            let duplicateCreated = false
+            
+            const handleRightMouseMove = (e: MouseEvent) => {
+                const currentPoint = getSVGMousePosition(e as any)
+                const deltaX = currentPoint.x - startPoint.x
+                const deltaY = currentPoint.y - startPoint.y
+                const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+                
+                // Create duplicate DOM element directly without React
+                if (distance > 5 && !dragThresholdMet) {
+                    dragThresholdMet = true
+                    duplicateCreated = true
+                    
+                    // Get the original block's SVG element
+                    const originalElement = document.getElementById(`${id}-group`)
+                    if (originalElement) {
+                        // Clone the original element
+                        duplicateElement = originalElement.cloneNode(true) as SVGGElement
+                        duplicateElement.id = `${newDuplicateId}-group`
+                        duplicateElement.style.opacity = '0.7'
+                        duplicateElement.style.pointerEvents = 'none'
+                        
+                        // Add to the same parent (the SVG canvas)
+                        originalElement.parentElement?.appendChild(duplicateElement)
+                    }
+                }
+                
+                // Update duplicate position by directly manipulating the DOM
+                if (duplicateCreated && duplicateElement) {
+                    const newX = currentPoint.x - position.width / 2
+                    const newY = currentPoint.y - position.height / 2
+                    duplicateElement.setAttribute('transform', `translate(${newX}, ${newY})`)
+                }
+            }
+            
+            const handleRightMouseUp = (e: MouseEvent) => {
+                // Clean up event listeners
+                document.removeEventListener('mousemove', handleRightMouseMove)
+                document.removeEventListener('mouseup', handleRightMouseUp)
+                
+                if (duplicateCreated && duplicateElement) {
+                    // Get final position from the DOM element
+                    const transform = duplicateElement.getAttribute('transform') || ''
+                    const matches = transform.match(/translate\(([^,]+),\s*([^)]+)\)/)
+                    
+                    if (matches) {
+                        const finalX = parseFloat(matches[1])
+                        const finalY = parseFloat(matches[2])
+                        
+                        // Remove the temporary DOM element
+                        duplicateElement.remove()
+                        
+                        // NOW create the React block with the final position
+                        if (onContextMenu) {
+                            onContextMenu(`duplicate:${id}:${newDuplicateId}`, finalX + position.width / 2, finalY + position.height / 2)
+                        }
+                    }
+                } else {
+                    // Show context menu
+                    if (onContextMenu) {
+                        onContextMenu(id, e.clientX, e.clientY)
+                    }
+                }
+            }
+            
+            // Add event listeners
+            document.addEventListener('mousemove', handleRightMouseMove)
+            document.addEventListener('mouseup', handleRightMouseUp)
+        }
+    }, [position, getSVGMousePosition, id, blockType, onContextMenu])
+    /**
+     * Handle context menu event - prevent default to avoid browser menu
+     */
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        // Context menu is handled in the right-click mousedown event
+    }, [])
 
     // NOW WE CAN DO EARLY RETURNS AFTER ALL HOOKS ARE DECLARED
     
@@ -365,7 +490,7 @@ export default function Block({
         fill: blockConfig?.styling.color || 'white',
         stroke: selected ? 'blue' : (blockConfig?.styling.borderColor || 'black'),
         strokeWidth: selected ? 2 : 1,
-        resizeCornerSize: 8,
+        resizeCornerSize: 8, // Increased from 8 for easier grabbing
         portSize: 8
     }
 
@@ -403,50 +528,25 @@ export default function Block({
                 transform={`translate(${position.x}, ${position.y})`}
                 onMouseEnter={() => !isDragging && !isResizing && setShowResizeHandles(true)}
                 onMouseLeave={() => !isDragging && !isResizing && setShowResizeHandles(false)}
+                // onMouseDown={handleRightMouseDown}
+                onContextMenu={handleContextMenu} 
             >
-                {/* Shadow rectangle */}
-                <rect
-                    className="block-shadow-rect"
-                    fill="rgba(0, 0, 0, 0.3)"
-                    stroke="none"
-                    rx="2"
-                    x={shadowOffset}
-                    y={shadowOffset}
-                    width={position.width}
-                    height={position.height}
-                />
-
-                {/* Main block rectangle */}
-                <rect
-                    className="rectangle block-shadow"
-                    fill={blockStyle.fill}
-                    stroke={blockStyle.stroke}
-                    strokeWidth={blockStyle.strokeWidth}
-                    rx="2"
-                    x={0}
-                    y={0}
-                    width={position.width}
-                    height={position.height}
+                {/* Mask component handles the visual appearance */}
+                <g 
                     style={{ 
                         cursor: isDragging ? 'grabbing' : 'grab',
-                        userSelect: 'none'
+                        userSelect: 'none',
                     }}
                     onMouseDown={handleMouseDown}
-                />
-
-                {/* Block display name inside block */}
-                <text
-                    x={position.width / 2}
-                    y={position.height / 2}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fontSize="10"
-                    fontFamily="sans-serif"
-                    fill={blockConfig.styling.textColor}
-                    style={{ userSelect: 'none', pointerEvents: 'none' }}
                 >
-                    {blockConfig.displayName}
-                </text>
+                    <Mask
+                        blockType={blockType}
+                        parameters={blockParameters}
+                        width={position.width}
+                        height={position.height}
+                        selected={selected}
+                    />
+                </g>
 
                 {/* Input ports */}
                 {Array.from({ length: blockConfig.ports.inputs }, (_, index) => {
@@ -498,46 +598,99 @@ export default function Block({
                 {/* Resize handles */}
                 {showResizeHandles && !isDragging && !isResizing && (
                     <>
-                        <rect
-                            x={-blockStyle.resizeCornerSize / 2}
-                            y={-blockStyle.resizeCornerSize / 2}
-                            width={blockStyle.resizeCornerSize}
-                            height={blockStyle.resizeCornerSize}
-                            fill="white"
-                            stroke="gray"
-                            style={{ cursor: 'nwse-resize' }}
-                            onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
-                        />
-                        <rect
-                            x={position.width - blockStyle.resizeCornerSize / 2}
-                            y={-blockStyle.resizeCornerSize / 2}
-                            width={blockStyle.resizeCornerSize}
-                            height={blockStyle.resizeCornerSize}
-                            fill="white"
-                            stroke="gray"
-                            style={{ cursor: 'nesw-resize' }}
-                            onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
-                        />
-                        <rect
-                            x={-blockStyle.resizeCornerSize / 2}
-                            y={position.height - blockStyle.resizeCornerSize / 2}
-                            width={blockStyle.resizeCornerSize}
-                            height={blockStyle.resizeCornerSize}
-                            fill="white"
-                            stroke="gray"
-                            style={{ cursor: 'nesw-resize' }}
-                            onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
-                        />
-                        <rect
-                            x={position.width - blockStyle.resizeCornerSize / 2}
-                            y={position.height - blockStyle.resizeCornerSize / 2}
-                            width={blockStyle.resizeCornerSize}
-                            height={blockStyle.resizeCornerSize}
-                            fill="white"
-                            stroke="gray"
-                            style={{ cursor: 'nwse-resize' }}
-                            onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
-                        />
+                        {/* Northwest resize handle */}
+                        <g>
+                            {/* Large invisible interactive area */}
+                            <rect
+                                x={-16}
+                                y={-16}
+                                width={24}
+                                height={24}
+                                fill="transparent"
+                                style={{ cursor: 'nwse-resize' }}
+                                onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
+                            />
+                            {/* Visible handle */}
+                            <rect
+                                x={-blockStyle.resizeCornerSize / 2}
+                                y={-blockStyle.resizeCornerSize / 2}
+                                width={blockStyle.resizeCornerSize}
+                                height={blockStyle.resizeCornerSize}
+                                fill="white"
+                                stroke="gray"
+                                strokeWidth={1}
+                                style={{ pointerEvents: 'none' }}
+                            />
+                        </g>
+
+                        {/* Northeast resize handle */}
+                        <g>
+                            <rect
+                                x={position.width - 8}
+                                y={-16}
+                                width={24}
+                                height={24}
+                                fill="transparent"
+                                style={{ cursor: 'nesw-resize' }}
+                                onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
+                            />
+                            <rect
+                                x={position.width - blockStyle.resizeCornerSize / 2}
+                                y={-blockStyle.resizeCornerSize / 2}
+                                width={blockStyle.resizeCornerSize}
+                                height={blockStyle.resizeCornerSize}
+                                fill="white"
+                                stroke="gray"
+                                strokeWidth={1}
+                                style={{ pointerEvents: 'none' }}
+                            />
+                        </g>
+
+                        {/* Southwest resize handle */}
+                        <g>
+                            <rect
+                                x={-16}
+                                y={position.height - 8}
+                                width={24}
+                                height={24}
+                                fill="transparent"
+                                style={{ cursor: 'nesw-resize' }}
+                                onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
+                            />
+                            <rect
+                                x={-blockStyle.resizeCornerSize / 2}
+                                y={position.height - blockStyle.resizeCornerSize / 2}
+                                width={blockStyle.resizeCornerSize}
+                                height={blockStyle.resizeCornerSize}
+                                fill="white"
+                                stroke="gray"
+                                strokeWidth={1}
+                                style={{ pointerEvents: 'none' }}
+                            />
+                        </g>
+
+                        {/* Southeast resize handle */}
+                        <g>
+                            <rect
+                                x={position.width - 8}
+                                y={position.height - 8}
+                                width={24}
+                                height={24}
+                                fill="transparent"
+                                style={{ cursor: 'nwse-resize' }}
+                                onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
+                            />
+                            <rect
+                                x={position.width - blockStyle.resizeCornerSize / 2}
+                                y={position.height - blockStyle.resizeCornerSize / 2}
+                                width={blockStyle.resizeCornerSize}
+                                height={blockStyle.resizeCornerSize}
+                                fill="white"
+                                stroke="gray"
+                                strokeWidth={1}
+                                style={{ pointerEvents: 'none' }}
+                            />
+                        </g>
                     </>
                 )}
             </g>
@@ -676,3 +829,5 @@ function ParameterDialog({
         </div>
     )
 }
+
+export default Block
