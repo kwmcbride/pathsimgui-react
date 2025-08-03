@@ -1,0 +1,48 @@
+{
+    "blockType": "Gain",
+    "displayName": "Gain",
+    "description": "Multiplies input by a constant gain value",
+    "pathsimClass": "Gain",
+    "category": "Math Operations",
+    "ports": {
+        "inputs": 1,
+        "outputs": 1
+    },
+    "parameters": [
+        {
+            "name": "gain",
+            "displayName": "Gain",
+            "type": "number",
+            "defaultValue": 1.0,
+            "description": "Gain value to multiply the input",
+            "required": true,
+            "validation": {
+                "min": null,
+                "max": null
+            }
+        },
+        {
+            "name": "saturateOnIntegerOverflow",
+            "displayName": "Saturate on integer overflow",
+            "type": "boolean",
+            "defaultValue": false,
+            "description": "Saturate to max/min values on integer overflow",
+            "required": false
+        }
+    ],
+    "styling": {
+        "defaultSize": {
+            "width": 60,
+            "height": 40
+        },
+        "color": "#E6F3FF",
+        "borderColor": "#0066CC",
+        "textColor": "#000000",
+        "iconPath": "/icons/gain.svg"
+    },
+    "simulation": {
+        "canBeSubsystem": false,
+        "executionOrder": 2,
+        "sampleTime": "inherited"
+    }
+}

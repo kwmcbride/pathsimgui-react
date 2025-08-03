@@ -1,0 +1,44 @@
+{
+    "maskType": "Gain",
+    "version": "1.0",
+    "display": {
+        "type": "composite",
+        "elements": [
+            {
+                "type": "path",
+                "x": 0,
+                "y": 0,
+                "path": "M 0% 0% L 80% 0% L 100% 50% L 80% 100% L 0% 100% Z",
+                "fill": "#E6F3FF",
+                "stroke": "#0066CC",
+                "strokeWidth": 1,
+                "useShadow": true
+            },
+            {
+                "type": "text",
+                "x": "45%",
+                "y": "50%",
+                "text": "${gain}",
+                "fontSize": "25%",
+                "fontFamily": "Arial, sans-serif",
+                "textAnchor": "middle",
+                "fill": "#000000",
+                "fontWeight": "bold"
+            }
+        ]
+    },
+    "parameterBindings": {
+        "gain": {
+            "displayFormat": "number",
+            "precision": 2,
+            "showUnits": false
+        }
+    },
+    "sizing": {
+        "minWidth": 40,
+        "minHeight": 30,
+        "defaultWidth": 60,
+        "defaultHeight": 40,
+        "maintainAspectRatio": false
+    }
+}

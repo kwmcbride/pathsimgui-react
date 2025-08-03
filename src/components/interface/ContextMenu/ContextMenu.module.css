@@ -1,0 +1,36 @@
+.contextMenu {
+    background: rgb(36, 36, 36);
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 160px;
+    padding: 4px 0;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    color: #fff;
+}
+
+.menuItem {
+    padding: 1px 16px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.menuItem:hover {
+    background-color: #474747;
+}
+
+.menuItem.disabled {
+    color: #999;
+    cursor: not-allowed;
+}
+
+.menuItem.disabled:hover {
+    background-color: transparent;
+}
+
+.separator {
+    height: 1px;
+    background-color: #eee;
+    margin: 4px 0;
+}

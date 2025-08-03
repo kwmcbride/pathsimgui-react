@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react'
-import Block from '../Block/Block'
-import ContextMenu from '../interface/ContextMenu/ContextMenu'
+import Block from '../../Block/Block'
+import ContextMenu from '../ContextMenu/ContextMenu'
 import styles from './Canvas.module.css'
 
 interface BlockData {
