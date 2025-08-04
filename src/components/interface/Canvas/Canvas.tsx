@@ -69,6 +69,20 @@ export default function Canvas() {
     const isSelectionDragging = useRef(false)
 
     const [isAnyBlockDragging, setIsAnyBlockDragging] = useState(false)
+    const [dragCopyGroup, setDragCopyGroup] = useState<Set<string> | null>(null)
+    const [ghostBlockIds, setGhostBlockIds] = useState<Set<string>>(new Set());
+    const [dragGhosts, setDragGhosts] = useState<BlockData[] | null>(null);
+
+    const handleStartGroupDragCopy = useCallback((blockIds: string[], startPoint: { x: number, y: number }) => {
+        // Create ghost copies at the start positions
+        const ghosts = blockIds.map(blockId => {
+            const block = blocks.find(b => b.id === blockId);
+            return block ? { ...block, id: `ghost_${block.id}` } : null;
+        }).filter(Boolean) as BlockData[];
+        setDragGhosts(ghosts);
+    }, [blocks]);
+
+
 
     /**
      * Convert screen coordinates to SVG coordinates
@@ -162,6 +176,14 @@ export default function Canvas() {
         }
     }, [getSVGMousePosition, blocks])
 
+    useEffect(() => {
+        const handleMouseUp = () => {
+            setGhostBlockIds(new Set());
+        };
+        document.addEventListener('mouseup', handleMouseUp);
+        return () => document.removeEventListener('mouseup', handleMouseUp);
+    }, []);
+
     /**
      * Handle block selection
      */
@@ -197,7 +219,9 @@ export default function Canvas() {
 
     const handleDragEnd = useCallback(() => {
         setIsAnyBlockDragging(false)
+        setGhostBlockIds(new Set()) // Clear all ghost blocks when drag ends
     }, [])
+
     
     // Update the ref whenever selectedBlocks changes
     useEffect(() => {
@@ -208,59 +232,59 @@ export default function Canvas() {
      * Handle position changes - move all selected blocks together
      */
     const handleBlockPositionChange = useCallback((blockId: string, newPosition: { x: number, y: number, width: number, height: number }) => {
-    console.log('Canvas received position update:', blockId, newPosition);
+        console.log('Canvas received position update:', blockId, newPosition);
 
-    setBlocks(prevBlocks => {
-        const blockBeingDragged = prevBlocks.find(block => block.id === blockId)
-        if (!blockBeingDragged) return prevBlocks
-        
-        const snappedPosition = {
-            ...newPosition,
-            x: snapToGrid(newPosition.x, GRID_SIZE),
-            y: snapToGrid(newPosition.y, GRID_SIZE)
-        }
-
-        const currentSelection = selectedBlocksRef.current
-        
-        // Calculate delta movement from the current position in state
-        const deltaX = snappedPosition.x - blockBeingDragged.position.x
-        const deltaY = snappedPosition.y - blockBeingDragged.position.y
-
-        // NEW: Check for width/height changes too
-        const widthChanged = snappedPosition.width !== blockBeingDragged.position.width
-        const heightChanged = snappedPosition.height !== blockBeingDragged.position.height
-
-        if (
-            Math.abs(deltaX) < 0.1 &&
-            Math.abs(deltaY) < 0.1 &&
-            !widthChanged &&
-            !heightChanged
-        ) {
-            return prevBlocks
-        }
-        
-        // Apply movement to all blocks
-        return prevBlocks.map(block => {
-            if (block.id === blockId) {
-                // Update the dragged/resized block
-                return { ...block, position: snappedPosition }
-            } else if (currentSelection.has(block.id) && currentSelection.size > 1) {
-                // Move other selected blocks by the same delta (do not resize them)
-                const newPos = {
-                    ...block.position,
-                    x: snapToGrid(block.position.x + deltaX, GRID_SIZE),
-                    y: snapToGrid(block.position.y + deltaY, GRID_SIZE)
-                }
-
-                return {
-                    ...block,
-                    position: newPos
-                }
+        setBlocks(prevBlocks => {
+            const blockBeingDragged = prevBlocks.find(block => block.id === blockId)
+            if (!blockBeingDragged) return prevBlocks
+            
+            const snappedPosition = {
+                ...newPosition,
+                x: snapToGrid(newPosition.x, GRID_SIZE),
+                y: snapToGrid(newPosition.y, GRID_SIZE)
             }
-            return block
+
+            const currentSelection = selectedBlocksRef.current
+            
+            // Calculate delta movement from the current position in state
+            const deltaX = snappedPosition.x - blockBeingDragged.position.x
+            const deltaY = snappedPosition.y - blockBeingDragged.position.y
+
+            // NEW: Check for width/height changes too
+            const widthChanged = snappedPosition.width !== blockBeingDragged.position.width
+            const heightChanged = snappedPosition.height !== blockBeingDragged.position.height
+
+            if (
+                Math.abs(deltaX) < 0.1 &&
+                Math.abs(deltaY) < 0.1 &&
+                !widthChanged &&
+                !heightChanged
+            ) {
+                return prevBlocks
+            }
+            
+            // Apply movement to all blocks
+            return prevBlocks.map(block => {
+                if (block.id === blockId) {
+                    // Update the dragged/resized block
+                    return { ...block, position: snappedPosition }
+                } else if (currentSelection.has(block.id) && currentSelection.size > 1) {
+                    // Move other selected blocks by the same delta (do not resize them)
+                    const newPos = {
+                        ...block.position,
+                        x: snapToGrid(block.position.x + deltaX, GRID_SIZE),
+                        y: snapToGrid(block.position.y + deltaY, GRID_SIZE)
+                    }
+
+                    return {
+                        ...block,
+                        position: newPos
+                    }
+                }
+                return block
+            })
         })
-    })
-}, [])
+    }, [])
 
    
     /**
@@ -283,81 +307,132 @@ export default function Canvas() {
     /**
      * Handle right-click context menu on blocks OR duplicate creation
      */
-    const handleBlockContextMenu = useCallback((blockIdOrAction: string, x: number, y: number) => {
-        // Check if this is a duplicate action
-        if (blockIdOrAction.startsWith('duplicate:')) {
-            const [, originalId, newId] = blockIdOrAction.split(':')
-        
-        // Check if we're duplicating a group or single block
-        if (selectedBlocks.size > 1 && selectedBlocks.has(originalId)) {
-            // Group duplication - duplicate all selected blocks
-            const newBlocks: BlockData[] = []
-            const blockMap = new Map<string, string>() // Map old ID to new ID
+    // Add a mouse up handler to the document when drag-copy starts
+const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: number, deltaY: number, anchorId?: string) => {
+    // Handle duplication (single or group)
+    if (blockIdOrAction.startsWith('duplicate:')) {
+        const [, originalId, type] = blockIdOrAction.split(':');
+
+        // GROUP DUPLICATION
+        if (type === 'group' && selectedBlocks.size > 1 && selectedBlocks.has(originalId)) {
+            const newBlocks: BlockData[] = [];
+            const newBlockIds: string[] = [];
             
-            // Calculate offset based on mouse position and first block
-            const firstBlock = blocks.find(block => block.id === originalId)
-            if (!firstBlock) return
-            
-            const offsetX = snapToGrid(x - firstBlock.position.x, GRID_SIZE)
-            const offsetY = snapToGrid(y - firstBlock.position.y, GRID_SIZE)
-            
-            // Create duplicates for all selected blocks
+            const anchorBlock = blocks.find(b => b.id === anchorId || originalId);
+
             selectedBlocks.forEach(blockId => {
-                const originalBlock = blocks.find(block => block.id === blockId)
-                if (originalBlock) {
-                    const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-                    blockMap.set(blockId, newBlockId)
-                    
-                    const newBlock: BlockData = {
+                const originalBlock = blocks.find(b => b.id === blockId);
+                if (originalBlock && anchorBlock) {
+                    // Calculate offset from anchor block
+                    const offsetX = originalBlock.position.x - anchorBlock.position.x;
+                    const offsetY = originalBlock.position.y - anchorBlock.position.y;
+                    const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    newBlockIds.push(newBlockId);
+                    newBlocks.push({
+                        ...originalBlock,
                         id: newBlockId,
-                        blockType: originalBlock.blockType,
                         position: {
-                            x: snapToGrid(originalBlock.position.x + offsetX, GRID_SIZE),
-                            y: snapToGrid(originalBlock.position.y + offsetY, GRID_SIZE),
-                            width: originalBlock.position.width,
-                            height: originalBlock.position.height
-                        },
-                        parameters: [...originalBlock.parameters]
-                    }
-                    newBlocks.push(newBlock)
+                            ...originalBlock.position,
+                            x: snapToGrid(anchorBlock.position.x + deltaX + offsetX, GRID_SIZE),
+                            y: snapToGrid(anchorBlock.position.y + deltaY + offsetY, GRID_SIZE)
+                        }
+                    });
                 }
-            })
-            
-            // Add all new blocks and select them
-            setBlocks(prev => [...prev, ...newBlocks])
-            setSelectedBlocks(new Set(Array.from(blockMap.values())))
-            
-        } else {
-            // Single block duplication (existing code)
-            const originalBlock = blocks.find(block => block.id === originalId)
-            
-            if (originalBlock) {
-                const newBlock: BlockData = {
-                    id: newId,
-                    blockType: originalBlock.blockType,
-                    position: {
-                        x: snapToGrid(x - originalBlock.position.width / 2, GRID_SIZE),
-                        y: snapToGrid(y - originalBlock.position.height / 2, GRID_SIZE),
-                        width: originalBlock.position.width,
-                        height: originalBlock.position.height
-                    },
-                    parameters: [...originalBlock.parameters]
+            });
+
+            setBlocks(prev => [...prev, ...newBlocks]);
+            setGhostBlockIds(new Set(newBlockIds));
+            setSelectedBlocks(new Set(newBlockIds));
+            requestAnimationFrame(() => {
+                setGhostBlockIds(new Set());
+            });
+            return;
+            // const firstBlock = blocks.find(b => b.id === originalId);
+            // if (!firstBlock) return;
+
+            // const offsetX = snapToGrid(x - firstBlock.position.x, GRID_SIZE);
+            // const offsetY = snapToGrid(y - firstBlock.position.y, GRID_SIZE);
+
+            // selectedBlocks.forEach(blockId => {
+            //     const originalBlock = blocks.find(b => b.id === blockId);
+            //     if (originalBlock) {
+            //         const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            //         newBlockIds.push(newBlockId);
+            //         newBlocks.push({
+            //             ...originalBlock,
+            //             id: newBlockId,
+            //             position: {
+            //                 ...originalBlock.position,
+            //                 x: snapToGrid(originalBlock.position.x + offsetX, GRID_SIZE),
+            //                 y: snapToGrid(originalBlock.position.y + offsetY, GRID_SIZE)
+            //             }
+            //         });
+            //     }
+            // });
+
+            // setBlocks(prev => [...prev, ...newBlocks]);
+            // setGhostBlockIds(new Set(newBlockIds)); // Ghost only the new blocks
+            // console.log('Ghost block IDs set:', newBlockIds);
+            // setSelectedBlocks(new Set(newBlockIds)); // Select the new blocks
+
+            // // setTimeout(() => {
+            // //     setGhostBlockIds(new Set());
+            // //     console.log('Ghost block IDs cleared after duplication');
+            // // }, 0);
+
+            // requestAnimationFrame(() => {
+            //     setGhostBlockIds(new Set());
+            //     console.log('Ghost block IDs cleared after duplication');
+            // });
+
+            // // Remove ghosting on mouse up
+            // const handleMouseUp = () => {
+            //     setGhostBlockIds(new Set());
+            //     document.removeEventListener('mouseup', handleMouseUp);
+            // };
+            // document.addEventListener('mouseup', handleMouseUp);
+            // return;
+        }
+
+        // SINGLE BLOCK DUPLICATION
+        const originalBlock = blocks.find(block => block.id === originalId);
+        if (originalBlock) {
+            const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const newBlock: BlockData = {
+                ...originalBlock,
+                id: newBlockId,
+                position: {
+                    x: snapToGrid(originalBlock.position.x + deltaX, GRID_SIZE),
+                    y: snapToGrid(originalBlock.position.y + deltaY, GRID_SIZE),
+                    width: originalBlock.position.width,
+                    height: originalBlock.position.height
                 }
-                
-                setBlocks(prev => [...prev, newBlock])
-                setSelectedBlocks(new Set([newId])) // Select the new block
-            }
+            };
+            setBlocks(prev => [...prev, newBlock]);
+            setGhostBlockIds(new Set([newBlockId]));
+            setSelectedBlocks(new Set([newBlockId]));
+
+            requestAnimationFrame(() => {
+                setGhostBlockIds(new Set());
+            });
         }
-        } else {
-            // Regular context menu
-            setContextMenu({
-                visible: true,
-                x,
-                y,
-                blockId: blockIdOrAction
-            })
-        }
-    }, [blocks, selectedBlocks])
+        return;
+    }
+
+    // Regular context menu (not duplication)
+    setGhostBlockIds(new Set());
+        setContextMenu({
+            visible: true,
+            x,
+            y,
+            blockId: blockIdOrAction
+        });
+    }, [blocks, selectedBlocks]);
+
+// const handleDragEnd = useCallback(() => {
+//     setIsAnyBlockDragging(false)
+//     setGhostBlockIds(new Set()) // Clear all ghost blocks when drag ends
+// }, [])
 
     // Close context menu when clicking elsewhere
     const closeContextMenu = useCallback(() => {
@@ -451,6 +526,8 @@ export default function Canvas() {
     }, [isAnyBlockDragging])
 
 
+
+
     const renderGrid = useCallback(() => {
         const lines = []
         const viewBox = { width: 2400, height: 1600 } // From your SVG viewBox
@@ -532,12 +609,15 @@ export default function Canvas() {
                         position={block.position}
                         parameters={block.parameters}
                         selected={selectedBlocks.has(block.id)}
+                        ghost={ghostBlockIds.has(block.id)} // Fix: was "gghost"
+                        selectedBlocks={Array.from(selectedBlocks)}
+                        onStartGroupDragCopy={handleStartGroupDragCopy}
                         onParameterChange={handleBlockParameterChange}
                         onPositionChange={handleBlockPositionChange}
                         onContextMenu={handleBlockContextMenu}
                         onSelect={handleBlockSelect}
-                        onDragStart={handleDragStart}  // Add this
-                        onDragEnd={handleDragEnd}      // Add this
+                        onDragStart={handleDragStart}
+                        onDragEnd={handleDragEnd}
                     />
                 ))}
                 

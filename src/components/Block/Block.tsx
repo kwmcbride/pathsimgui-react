@@ -34,8 +34,9 @@ interface BlockProps {
     isPreview?: boolean
     parameters?: BlockParameter[]
     selected?: boolean
-    selectedBlocks?: Set<string> // Add this
-    allBlocks?: BlockData[] // Add this
+    ghost?: boolean
+    selectedBlocks?: string[]
+    allBlocks?: any[]
     onParameterChange?: (blockId: string, parameters: BlockParameter[]) => void
     onPositionChange?: (blockId: string, position: Position) => void
     onGroupMove?: (deltas: Record<string, { deltaX: number, deltaY: number }>) => void // Add this
@@ -69,8 +70,9 @@ function Block({
     isPreview = false,
     parameters = [],
     selected = false,
-    selectedBlocks,
-    allBlocks,
+    ghost = false,
+    selectedBlocks = [],
+    allBlocks = [],
     onParameterChange,
     onPositionChange,
     onGroupMove,
@@ -451,93 +453,30 @@ useEffect(() => {
      */
     const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
         console.log('handleResizeMouseDown called with handle:', handle);
-        e.stopPropagation();
-        e.preventDefault();
-        
-        // Set BOTH ref AND state to ensure effect sees the change
-        isResizingRef.current = true;
-        setIsResizing(true);
-        console.log('Set isResizingRef.current to:', isResizingRef.current, 'and isResizing state to: true');
-        
-        const svgMousePos = getSVGMousePosition(e);
-        console.log('Initial SVG position:', svgMousePos);
-        
-        resizeStartRef.current = svgMousePos;
-        initialSizeRef.current = { width: position.width, height: position.height };
-        initialPositionRef.current = { x: position.x, y: position.y };
-        resizeHandleRef.current = handle;
-        onDragStart?.();
-        
-        console.log('Adding event listeners for resize');
-        document.addEventListener('mousemove', handleResizeMove);
-        document.addEventListener('mouseup', handleResizeUp);
+        if (e.button === 0) { // Only handle left mouse button
+
+            e.stopPropagation();
+            e.preventDefault();
+            
+            // Set BOTH ref AND state to ensure effect sees the change
+            isResizingRef.current = true;
+            setIsResizing(true);
+            console.log('Set isResizingRef.current to:', isResizingRef.current, 'and isResizing state to: true');
+            
+            const svgMousePos = getSVGMousePosition(e);
+            console.log('Initial SVG position:', svgMousePos);
+            
+            resizeStartRef.current = svgMousePos;
+            initialSizeRef.current = { width: position.width, height: position.height };
+            initialPositionRef.current = { x: position.x, y: position.y };
+            resizeHandleRef.current = handle;
+            onDragStart?.();
+            
+            console.log('Adding event listeners for resize');
+            document.addEventListener('mousemove', handleResizeMove);
+            document.addEventListener('mouseup', handleResizeUp);
+        }
     }, [position, getSVGMousePosition, onDragStart]);
-
-    // const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
-    //     e.stopPropagation()
-        
-    //     const svgMousePos = getSVGMousePosition(e)
-
-    //     resizeStartRef.current = svgMousePos
-    //     initialSizeRef.current = { width: position.width, height: position.height }
-    //     initialPositionRef.current = { x: position.x, y: position.y } // Use the ref
-    //     resizeHandleRef.current = handle
-    //     setIsResizing(true)
-    //     onDragStart?.()
-        
-        // Mouse move handler for resizing
-        // const handleResizeMove = (e: MouseEvent) => {
-        //     const currentMouse = getSVGMousePosition(e)
-            
-        //     const deltaX = currentMouse.x - resizeStartRef.current.x
-        //     const deltaY = currentMouse.y - resizeStartRef.current.y
-            
-        //     let newWidth = initialSizeRef.current.width
-        //     let newHeight = initialSizeRef.current.height
-        //     let newX = initialPositionRef.current.x  // Use ref.current
-        //     let newY = initialPositionRef.current.y  // Use ref.current
-                        
-        //     switch (handle) {
-        //         case 'nw':
-        //             newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
-        //             newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
-        //             newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth)
-        //             newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight)
-        //             break
-        //         case 'ne':
-        //             newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
-        //             newHeight = Math.max(30, initialSizeRef.current.height - deltaY)
-        //             newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight)
-        //             // newX stays initialPositionRef.current.x
-        //             break
-        //         case 'sw':
-        //             newWidth = Math.max(50, initialSizeRef.current.width - deltaX)
-        //             newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
-        //             newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth)
-        //             // newY stays initialPositionRef.current.y
-        //             break
-        //         case 'se':
-        //             newWidth = Math.max(50, initialSizeRef.current.width + deltaX)
-        //             newHeight = Math.max(30, initialSizeRef.current.height + deltaY)
-        //             // Both newX and newY stay as initialPositionRef.current values
-        //             break
-        //     }
-            
-        //     // Update ONLY the internal position - do NOT notify Canvas during resize
-        //     setPosition({
-        //         x: newX,
-        //         y: newY,
-        //         width: newWidth,
-        //         height: newHeight
-        //     })
-        // }
-
-        
-        
-        // Add mouse move and up listeners to document    
-    //     document.addEventListener('mousemove', handleResizeMove)
-    //     document.addEventListener('mouseup', handleResizeUp)
-    // }, [position, getSVGMousePosition, onDragStart, onDragEnd, handlePositionChange])
 
     /**
      * Handles mouse down on the block for drag, selection, and double-click.
@@ -638,84 +577,201 @@ useEffect(() => {
             document.addEventListener('mouseup', handleMouseUp)
         }
         else if (e.button === 2) {
-            e.preventDefault()
-            e.stopPropagation()
-            
-            const svgPoint = getSVGMousePosition(e)
-            const startPoint = { x: svgPoint.x, y: svgPoint.y }
-            const newDuplicateId = `${blockType.toLowerCase()}_${Date.now()}`
-            
-            let duplicateElement: SVGGElement | null = null
-            let dragThresholdMet = false
-            let duplicateCreated = false
-            
-            const handleRightMouseMove = (e: MouseEvent) => {
-                const currentPoint = getSVGMousePosition(e as any)
-                const deltaX = currentPoint.x - startPoint.x
-                const deltaY = currentPoint.y - startPoint.y
-                const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
-                
-                // Create duplicate DOM element directly without React
-                if (distance > 5 && !dragThresholdMet) {
-                    dragThresholdMet = true
-                    duplicateCreated = true
-                    
-                    // Get the original block's SVG element
-                    const originalElement = document.getElementById(`${id}-group`)
+            e.preventDefault();
+            e.stopPropagation();
+
+            const svgPoint = getSVGMousePosition(e);
+            const startPoint = { x: svgPoint.x, y: svgPoint.y };
+
+            // Get the block's current position
+            const blockX = initialPosition.x;
+            const blockY = initialPosition.y;
+
+            // Calculate offset from pointer to block origin
+            const offsetX = blockX - startPoint.x;
+            const offsetY = blockY - startPoint.y;
+
+            let dragThresholdMet = false;
+            let duplicateCreated = false;
+            let duplicateElements: SVGGElement[] = [];
+            let blockOffsets: { [blockId: string]: { x: number, y: number } } = {};
+
+            // For group: calculate offsets for all selected blocks
+            if (selected && selectedBlocks && selectedBlocks.length > 1) {
+                selectedBlocks.forEach(blockId => {
+                    const originalElement = document.getElementById(`${blockId}-group`);
                     if (originalElement) {
-                        // Clone the original element
-                        duplicateElement = originalElement.cloneNode(true) as SVGGElement
-                        duplicateElement.id = `${newDuplicateId}-group`
-                        duplicateElement.style.opacity = '0.7'
-                        duplicateElement.style.pointerEvents = 'none'
-                        
-                        // Add to the same parent (the SVG canvas)
-                        originalElement.parentElement?.appendChild(duplicateElement)
-                    }
-                }
-                
-                // Update duplicate position by directly manipulating the DOM
-                if (duplicateCreated && duplicateElement) {
-                    const newX = currentPoint.x - position.width / 2
-                    const newY = currentPoint.y - position.height / 2
-                    duplicateElement.setAttribute('transform', `translate(${newX}, ${newY})`)
-                }
-            }
-            
-            const handleRightMouseUp = (e: MouseEvent) => {
-                // Clean up event listeners
-                document.removeEventListener('mousemove', handleRightMouseMove)
-                document.removeEventListener('mouseup', handleRightMouseUp)
-                
-                if (duplicateCreated && duplicateElement) {
-                    // Get final position from the DOM element
-                    const transform = duplicateElement.getAttribute('transform') || ''
-                    const matches = transform.match(/translate\(([^,]+),\s*([^)]+)\)/)
-                    
-                    if (matches) {
-                        const finalX = parseFloat(matches[1])
-                        const finalY = parseFloat(matches[2])
-                        
-                        // Remove the temporary DOM element
-                        duplicateElement.remove()
-                        
-                        // NOW create the React block with the final position
-                        if (onContextMenu) {
-                            onContextMenu(`duplicate:${id}:${newDuplicateId}`, finalX + position.width / 2, finalY + position.height / 2)
+                        const transform = originalElement.getAttribute('transform') || '';
+                        const matches = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+                        if (matches) {
+                            const x = parseFloat(matches[1]);
+                            const y = parseFloat(matches[2]);
+                            blockOffsets[blockId] = { x: x - startPoint.x, y: y - startPoint.y };
                         }
                     }
-                } else {
-                    // Show context menu
-                    if (onContextMenu) {
-                        onContextMenu(id, e.clientX, e.clientY)
+                });
+            }
+
+            const handleRightMouseMove = (e: MouseEvent) => {
+                const currentPoint = getSVGMousePosition(e as any);
+                const deltaX = currentPoint.x - startPoint.x;
+                const deltaY = currentPoint.y - startPoint.y;
+                const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+                // Create ghost elements for all selected blocks once drag threshold is met
+                if (distance > 5 && !dragThresholdMet) {
+                    dragThresholdMet = true;
+                    duplicateCreated = true;
+
+                    if (selected && selectedBlocks && selectedBlocks.length > 1) {
+                        selectedBlocks.forEach(blockId => {
+                            const originalElement = document.getElementById(`${blockId}-group`);
+                            if (originalElement) {
+                                const duplicateElement = originalElement.cloneNode(true) as SVGGElement;
+                                duplicateElement.id = `${blockId}_ghost`;
+                                duplicateElement.style.opacity = '0.5';
+                                duplicateElement.style.pointerEvents = 'none';
+                                originalElement.parentElement?.appendChild(duplicateElement);
+                                duplicateElements.push(duplicateElement);
+                            }
+                        });
+                    } else {
+                        // Single block duplication
+                        const originalElement = document.getElementById(`${id}-group`);
+                        if (originalElement) {
+                            const duplicateElement = originalElement.cloneNode(true) as SVGGElement;
+                            duplicateElement.id = `${id}_ghost`;
+                            duplicateElement.style.opacity = '0.5';
+                            duplicateElement.style.pointerEvents = 'none';
+                            originalElement.parentElement?.appendChild(duplicateElement);
+                            duplicateElements.push(duplicateElement);
+                        }
                     }
                 }
-            }
-            
-            // Add event listeners
-            document.addEventListener('mousemove', handleRightMouseMove)
-            document.addEventListener('mouseup', handleRightMouseUp)
+
+                // Move all ghost elements as a group
+                if (duplicateCreated && duplicateElements.length > 0) {
+                    duplicateElements.forEach((duplicateElement, index) => {
+                        let blockId = selectedBlocks && selectedBlocks.length > 1
+                            ? selectedBlocks[index]
+                            : id;
+                        const offset = selected && selectedBlocks && selectedBlocks.length > 1
+                            ? blockOffsets[blockId] || { x: 0, y: 0 }
+                            : { x: offsetX, y: offsetY }; // <-- Use offset for single block
+                        const newX = startPoint.x + deltaX + offset.x;
+                        const newY = startPoint.y + deltaY + offset.y;
+                        duplicateElement.setAttribute('transform', `translate(${newX}, ${newY})`);
+                    });
+                }
+            };
+
+            const handleRightMouseUp = (e: MouseEvent) => {
+                document.removeEventListener('mousemove', handleRightMouseMove);
+                document.removeEventListener('mouseup', handleRightMouseUp);
+
+                // Remove all ghost elements
+                duplicateElements.forEach(element => element.remove());
+
+                // Calculate final mouse delta
+                const currentPoint = getSVGMousePosition(e as any);
+                const deltaX = currentPoint.x - startPoint.x;
+                const deltaY = currentPoint.y - startPoint.y;
+
+                // Notify Canvas to create real blocks at new positions
+                if (duplicateCreated && duplicateElements.length > 0 && onContextMenu) {
+                    if (selected && selectedBlocks && selectedBlocks.length > 1) {
+                        onContextMenu(`duplicate:${id}:group`, deltaX, deltaY, id);
+                    } else {
+                        // For single block, pass delta as usual
+                        onContextMenu(`duplicate:${id}:${id}_ghost`, deltaX, deltaY);
+                    }
+                } else if (onContextMenu) {
+                    onContextMenu(id, e.clientX, e.clientY);
+                }
+            };
+
+            document.addEventListener('mousemove', handleRightMouseMove);
+            document.addEventListener('mouseup', handleRightMouseUp);
+            onDragEnd?.();
         }
+        //     e.preventDefault()
+        //     e.stopPropagation()
+            
+        //     const svgPoint = getSVGMousePosition(e)
+        //     const startPoint = { x: svgPoint.x, y: svgPoint.y }
+        //     const newDuplicateId = `${blockType.toLowerCase()}_${Date.now()}`
+            
+        //     let duplicateElement: SVGGElement | null = null
+        //     let dragThresholdMet = false
+        //     let duplicateCreated = false
+            
+        //     const handleRightMouseMove = (e: MouseEvent) => {
+        //         const currentPoint = getSVGMousePosition(e as any)
+        //         const deltaX = currentPoint.x - startPoint.x
+        //         const deltaY = currentPoint.y - startPoint.y
+        //         const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+                
+        //         // Create duplicate DOM element directly without React
+        //         if (distance > 5 && !dragThresholdMet) {
+        //             dragThresholdMet = true
+        //             duplicateCreated = true
+                    
+        //             // Get the original block's SVG element
+        //             const originalElement = document.getElementById(`${id}-group`)
+        //             if (originalElement) {
+        //                 // Clone the original element
+        //                 duplicateElement = originalElement.cloneNode(true) as SVGGElement
+        //                 duplicateElement.id = `${newDuplicateId}-group`
+        //                 duplicateElement.style.opacity = '0.7'
+        //                 duplicateElement.style.pointerEvents = 'none'
+                        
+        //                 // Add to the same parent (the SVG canvas)
+        //                 originalElement.parentElement?.appendChild(duplicateElement)
+        //             }
+        //         }
+                
+        //         // Update duplicate position by directly manipulating the DOM
+        //         if (duplicateCreated && duplicateElement) {
+        //             const newX = currentPoint.x - position.width / 2
+        //             const newY = currentPoint.y - position.height / 2
+        //             duplicateElement.setAttribute('transform', `translate(${newX}, ${newY})`)
+        //         }
+        //     }
+            
+        //     const handleRightMouseUp = (e: MouseEvent) => {
+        //         // Clean up event listeners
+        //         document.removeEventListener('mousemove', handleRightMouseMove)
+        //         document.removeEventListener('mouseup', handleRightMouseUp)
+                
+        //         if (duplicateCreated && duplicateElement) {
+        //             // Get final position from the DOM element
+        //             const transform = duplicateElement.getAttribute('transform') || ''
+        //             const matches = transform.match(/translate\(([^,]+),\s*([^)]+)\)/)
+                    
+        //             if (matches) {
+        //                 const finalX = parseFloat(matches[1])
+        //                 const finalY = parseFloat(matches[2])
+                        
+        //                 // Remove the temporary DOM element
+        //                 duplicateElement.remove()
+                        
+        //                 // NOW create the React block with the final position
+        //                 if (onContextMenu) {
+        //                     onContextMenu(`duplicate:${id}:${newDuplicateId}`, finalX + position.width / 2, finalY + position.height / 2)
+        //                 }
+        //             }
+        //         } else {
+        //             // Show context menu
+        //             if (onContextMenu) {
+        //                 onContextMenu(id, e.clientX, e.clientY)
+        //             }
+        //         }
+        //     }
+            
+        //     // Add event listeners
+        //     document.addEventListener('mousemove', handleRightMouseMove)
+        //     document.addEventListener('mouseup', handleRightMouseUp)
+        // }
     }, [position, getSVGMousePosition, id, blockType, onContextMenu, selected, onSelect, onDragStart, onDragEnd])
     /**
      * Handle context menu event - prevent default to avoid browser menu
@@ -771,6 +827,9 @@ useEffect(() => {
             <g
                 id={`${id}-group`}
                 transform={`translate(${position.x}, ${position.y})`}
+                style={{
+                    opacity: ghost ? 0.5 : 1, // <-- add this line
+                }}
                 onMouseEnter={() => !isDragging && !isResizing && setShowResizeHandles(true)}
                 onMouseLeave={() => !isDragging && !isResizing && setShowResizeHandles(false)}
                 // onMouseDown={handleRightMouseDown}
