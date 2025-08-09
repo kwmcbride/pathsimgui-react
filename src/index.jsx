@@ -5,16 +5,19 @@ import Header from './components/Header/Header'
 import Editor from './components/Editor/Editor'
 import Ticker from './components/Ticker/Ticker'
 import Canvas from './components/interface/Canvas/Canvas'
+// import AppInitializer from './components/interface/AppInitializer/AppInitializer'
 
 import './index.css'
 
 const App = function() {
   return (
     <>
+    {/* <AppInitializer> */}
       <Header/>
       {/* <Ticker/> */}
       <Canvas/>
       {/* <Editor/> */}
+      {/* </AppInitializer> */}
     </>
   )
 }

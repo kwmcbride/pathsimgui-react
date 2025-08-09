@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, memo, useMemo } from 'react'
 import Port from '../Port/Port'
 import Mask from '../Mask/Mask'
-import { blockConfigManager, BlockConfiguration } from '../../lib/BlockConfigManager'
+import blockConfigManager from '../../lib/BlockConfigManager'
 import { snapToGrid, GRID_SIZE } from '../../utilities/grid'
 
 /**
@@ -59,6 +59,7 @@ interface BlockStyle {
 
 
 
+
 /**
  * Block component representing a draggable, configurable block on the canvas.
  * Handles rendering, selection, dragging, resizing, and parameter editing.
@@ -82,39 +83,27 @@ function Block({
     onDragEnd
 }: BlockProps) {
     // State hooks, these need to be at the top
-    
-    // Block configuration loaded from JSON
-    const [blockConfig, setBlockConfig] = useState<BlockConfiguration | null>(null)
 
-// Replace lines 98-115 and 167-185 (consolidate into one useEffect)
+    const blockConfig = blockConfigManager.getConfiguration(blockType) || {
+        blockType,
+        displayName: blockType,
+        ports: { inputs: 1, outputs: 1 },
+        styling: {
+            defaultSize: { width: 100, height: 60 },
+            color: '#f0f0f0',
+            borderColor: '#ccc',
+            textColor: '#333'
+        }}
 
-    // useEffect(() => {
-    //     const loadConfig = async () => {
-    //         try {
-    //             setLoading(true)
-    //             const config = await blockConfigManager.loadBlockConfig(blockType)
-    //             setBlockConfig(config)
-                
-    //             // If no parameters provided, use defaults from config
-    //             if (parameters.length === 0 && config) {
-    //                 const defaultParams = blockConfigManager.createDefaultParameters(blockType)
-    //                 setBlockParameters(defaultParams)
-    //             }
-    //         } catch (error) {
-    //             console.error(`Failed to load configuration for ${blockType}:`, error)
-    //         } finally {
-    //             setLoading(false)
-    //         }
-    //     }
-        
-    //     loadConfig()
-    // }, [blockType, parameters.length])
+    // Block styling
+    const blockStyle: BlockStyle = {
+        fill: blockConfig?.styling.color || 'white',
+        stroke: selected ? 'blue' : (blockConfig?.styling.borderColor || 'black'),
+        strokeWidth: selected ? 2 : 1,
+        resizeCornerSize: 8, // Increased from 8 for easier grabbing
+        portSize: 8
+    }
 
-
-
-    // Loading state for async config fetch
-    const [loading, setLoading] = useState(true)
-    
     // Position and size of the block
     const [position, setPosition] = useState<Position>(() => {
         // Initialize with provided position, or defaults if not provided
@@ -134,6 +123,7 @@ function Block({
     const [isResizing, setIsResizing] = useState(false)
     const [showResizeHandles, setShowResizeHandles] = useState(false)
     const [showParameterDialog, setShowParameterDialog] = useState(false)
+    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
     // Parameters for the block (editable by user)
     const [blockParameters, setBlockParameters] = useState<BlockParameter[]>(
@@ -163,52 +153,67 @@ function Block({
      * Loads block configuration from JSON when blockType changes.
      * Sets default parameters if none are provided.
      */
-    useEffect(() => {
-        const loadConfig = async () => {
-            try {
-                setLoading(true)
-                const config = await blockConfigManager.loadBlockConfig(blockType)
-                setBlockConfig(config)
-                
-                // If no parameters provided, use defaults from config
-                if (parameters.length === 0) {
-                    const defaultParams = blockConfigManager.createDefaultParameters(blockType)
-                    setBlockParameters(defaultParams)
-                }
-            } catch (error) {
-                console.error(`Failed to load configuration for ${blockType}:`, error)
-            } finally {
-                setLoading(false)
-            }
-        }
-        
-        loadConfig()
-    }, [blockType, parameters.length])
+    // useEffect(() => {
+    //     async function loadConfigs() {
+    //         try {
+    //             await blockConfigManager.initialize()
+    //             setConfigsLoaded(true)
+    //         } catch (error) {
+    //             console.error('Failed to load block configurations:', error)
+    //             setConfigsLoaded(true)
+    //         }
+    //     }
+    //     loadConfigs()
+    // }, [])
+
+        // Replace the hardcoded blockConfig object with this:
+        // const blockConfig = blockConfigManager.getConfiguration(blockType) || {
+        //     blockType,
+        //     displayName: blockType,
+        //     ports: { inputs: 1, outputs: 1 },
+        //     styling: {
+        //         defaultSize: { width: 100, height: 60 },
+        //         color: '#f0f0f0',
+        //         borderColor: '#ccc',
+        //         textColor: '#333'
+        //     }
+        // }
 
 // Replace the position sync effect with this version that uses a different approach
 
 useEffect(() => {
-    console.log('Position sync effect running');
-    
-    // Skip position sync entirely if we're currently resizing (using ref for immediate check)
-    if (isResizingRef.current) {
-        console.log('Skipping position sync - currently resizing via ref');
+    // Skip position sync if we're in the middle of a user interaction
+    if (isResizingRef.current || isDraggingRef.current) {
         return;
     }
     
-    // Only sync if we have valid position data
-    if (initialPosition.x !== undefined && initialPosition.y !== undefined) {
-        console.log('Syncing position from props:', initialPosition);
-        setPosition(prev => ({
-            ...prev,
-            x: initialPosition.x,
-            y: initialPosition.y,
-            width: initialPosition.width ?? prev.width,
-            height: initialPosition.height ?? prev.height
-        }))
+    // Skip if there's any ongoing transform/drag
+    if (dragOffset.x !== 0 || dragOffset.y !== 0) {
+        return;
     }
+    
+    // IMPORTANT: Skip sync if positions match to prevent loops
+    if (position.x === initialPosition.x && 
+        position.y === initialPosition.y &&
+        position.width === initialPosition.width &&
+        position.height === initialPosition.height) {
+        return;
+    }
+    
+    // Skip sync if we have invalid position data
+    if (initialPosition.x === undefined || initialPosition.y === undefined) {
+        return;
+    }
+    
+    console.log('Syncing position from props:', initialPosition);
+    setPosition({
+        x: initialPosition.x,
+        y: initialPosition.y,
+        width: initialPosition.width ?? position.width,
+        height: initialPosition.height ?? position.height
+    });
+    
 }, [initialPosition.x, initialPosition.y, initialPosition.width, initialPosition.height])
-
     /**
      * Updates block size to match config defaults if not set in initialPosition.
      */
@@ -500,37 +505,32 @@ useEffect(() => {
             // Mouse move handler for dragging
             const handleMouseMove = (e: MouseEvent) => {
                 const currentMouse = getSVGMousePosition(e)
-                
                 const deltaX = currentMouse.x - dragStartRef.current.x
                 const deltaY = currentMouse.y - dragStartRef.current.y
                 
-                const dragDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
-                if (dragDistance > 3 && !isDraggingRef.current) {
+                // Start dragging if moved enough
+                if (!isDraggingRef.current && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
                     isDraggingRef.current = true
                     setIsDragging(true)
-                    onDragStart?.() // ADD THIS LINE - call when drag starts
-
-                    // If this block isn't selected, select it
-                    if (!selected && onSelect) {
-                        onSelect(id, true, false)
-                    }
-
-                    // Cancel click detection if drag starts
-                    if (clickTimeoutRef.current) {
-                        clearTimeout(clickTimeoutRef.current)
-                        clickCountRef.current = 0
-                    }
+                    onDragStart?.()
                 }
-                
-                // If dragging, handle group movement
+        
                 if (isDraggingRef.current) {
-                    // Always use the Canvas position handler - it will handle group movement
+                    // Instead of JUST setting dragOffset, we need to update Canvas too
                     const newPosition = {
                         ...position,
                         x: blockStartRef.current.x + deltaX,
                         y: blockStartRef.current.y + deltaY
                     }
-                    handlePositionChange(newPosition)
+                    
+                    // Set the drag offset for smooth visual movement
+                    setDragOffset({ x: deltaX, y: deltaY })
+                    
+                    // IMPORTANT: For proper group movement, we need to tell Canvas
+                    if (selected && onPositionChange) {
+                        // We'll update Canvas position but not internal position yet
+                        onPositionChange(id, newPosition)
+                    }
                 }
             }
 
@@ -538,41 +538,29 @@ useEffect(() => {
              * Handles mouse up to finalize drag or handle single/double click.
              */
             const handleMouseUp = () => {
-                if (!isDraggingRef.current) {
-                    clickCountRef.current++
+                if (isDraggingRef.current) {
+                    const finalPosition = {
+                        ...position,
+                        x: blockStartRef.current.x + dragOffset.x,
+                        y: blockStartRef.current.y + dragOffset.y
+                    };
                     
-                    if (clickTimeoutRef.current) {
-                        clearTimeout(clickTimeoutRef.current)
-                    }
+                    // CRITICAL CHANGE: Update position THROUGH PARENT ONLY
+                    // Don't call setPosition directly - let the sync effect handle it
+                    onPositionChange?.(id, finalPosition);
                     
-                    if (clickCountRef.current === 1) {
-                        // Wait to see if this becomes a double-click
-                        clickTimeoutRef.current = setTimeout(() => {
-                            // Toggle selection with proper multi-select handling
-                            if (onSelect) {
-                                onSelect(id, !selected, multiSelect)
-                            }
-                            clickCountRef.current = 0
-                        }, 250)
-                    } else if (clickCountRef.current === 2) {
-                        // Double-click confirmed - add logging back
-                        console.log('Double-click detected, opening dialog')
-                        console.log('Current blockParameters:', blockParameters)
-                        console.log('Current showParameterDialog:', showParameterDialog)
-                        setShowParameterDialog(true)
-                        clickCountRef.current = 0
-                    }
-                } else {
-                    // Dragging just ended - notify Canvas to reset group drag
-                    onDragEnd?.()
+                    // Reset drag offset after notifying parent
+                    setDragOffset({ x: 0, y: 0 });
+                    
+                    // Signal drag end
+                    onDragEnd?.();
                 }
                 
-                setIsDragging(false)
-                isDraggingRef.current = false
-                document.removeEventListener('mousemove', handleMouseMove)
-                document.removeEventListener('mouseup', handleMouseUp)
+                setIsDragging(false);
+                isDraggingRef.current = false;
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
             }
-
             document.addEventListener('mousemove', handleMouseMove)
             document.addEventListener('mouseup', handleMouseUp)
         }
@@ -784,49 +772,12 @@ useEffect(() => {
 
     // NOW WE CAN DO EARLY RETURNS AFTER ALL HOOKS ARE DECLARED
     
-    // Block styling
-    const blockStyle: BlockStyle = {
-        fill: blockConfig?.styling.color || 'white',
-        stroke: selected ? 'blue' : (blockConfig?.styling.borderColor || 'black'),
-        strokeWidth: selected ? 2 : 1,
-        resizeCornerSize: 8, // Increased from 8 for easier grabbing
-        portSize: 8
-    }
-
-    const shadowOffset = 3
-
-    // Early Return for Loading State
-    if (loading || !blockConfig) {
-        return (
-            <g transform={`translate(${position.x}, ${position.y})`}>
-                <rect
-                    width={100}
-                    height={40}
-                    fill="#f0f0f0"
-                    stroke="#ccc"
-                    rx="2"
-                />
-                <text
-                    x={50}
-                    y={25}
-                    textAnchor="middle"
-                    fontSize="10"
-                    fill="#666"
-                >
-                    Loading...
-                </text>
-            </g>
-        )
-    }
-
-    
-    console.log('Rendering with position:', position);
     // Main Render
     return (
         <>
             <g
                 id={`${id}-group`}
-                transform={`translate(${position.x}, ${position.y})`}
+                transform={`translate(${position.x + dragOffset.x}, ${position.y + dragOffset.y})`}
                 style={{
                     opacity: ghost ? 0.5 : 1, // <-- add this line
                 }}
@@ -1134,4 +1085,19 @@ function ParameterDialog({
     )
 }
 
-export default Block
+// This prevents blocks from re-rendering unless their specific props change
+export default memo(Block, (prevProps, nextProps) => {
+  // Only re-render if something important changed
+  const positionChanged = 
+    prevProps.position.x !== nextProps.position.x ||
+    prevProps.position.y !== nextProps.position.y ||
+    prevProps.position.width !== nextProps.position.width ||
+    prevProps.position.height !== nextProps.position.height;
+  
+  const selectionChanged = prevProps.selected !== nextProps.selected;
+  const ghostChanged = prevProps.ghost !== nextProps.ghost;
+  
+  // Return true if nothing important changed (skip re-render)
+  // Return false to trigger a re-render
+  return !positionChanged && !selectionChanged && !ghostChanged;
+});

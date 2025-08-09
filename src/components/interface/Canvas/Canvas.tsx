@@ -4,6 +4,11 @@ import ContextMenu from '../ContextMenu/ContextMenu'
 import styles from './Canvas.module.css'
 import { throttle } from '../../../utilities/throttle'
 import { snapToGrid, GRID_SIZE } from '../../../utilities/grid'
+// import { BlockConfigManager } from '../../../lib/BlockConfigManager';
+// import blockConfigManager from '../../../lib/BlockConfigManager';   
+// import { testValue } from '../../../lib/test'
+// console.log('Test import:', testValue)
+import blockConfigManager from '../../../lib/BlockConfigManager'
 
 // Add these type definitions
 interface BlockData {
@@ -23,6 +28,13 @@ interface ContextMenuState {
     x: number
     y: number
     blockId: string | null
+}
+
+interface Position {
+    x: number
+    y: number
+    width: number
+    height: number
 }
 
 export default function Canvas() {
@@ -65,13 +77,42 @@ export default function Canvas() {
         currentY: 0
     })
 
-    const canvasRef = useRef<SVGSVGElement>(null)
-    const isSelectionDragging = useRef(false)
-
     const [isAnyBlockDragging, setIsAnyBlockDragging] = useState(false)
     const [dragCopyGroup, setDragCopyGroup] = useState<Set<string> | null>(null)
     const [ghostBlockIds, setGhostBlockIds] = useState<Set<string>>(new Set());
     const [dragGhosts, setDragGhosts] = useState<BlockData[] | null>(null);
+
+    const [configsLoaded, setConfigsLoaded] = useState(false);
+
+    const canvasRef = useRef<SVGSVGElement>(null)
+    const isSelectionDragging = useRef(false)
+
+    // Load configs on startup
+    useEffect(() => {
+        async function loadConfigs() {
+            try {
+                await blockConfigManager.initialize()
+                setConfigsLoaded(true)
+            } catch (error) {
+                console.error('Failed to load block configurations:', error)
+                setConfigsLoaded(true) // Still render with fallback configs
+            }
+        }
+        loadConfigs()
+    }, [])
+
+    // Show loading screen while configs load
+    // if (!configsLoaded) {
+    //     return (
+    //         <div style={{ 
+    //             padding: 40, 
+    //             textAlign: 'center',
+    //             fontFamily: 'monospace'
+    //         }}>
+    //             <h2>Loading Block Configurations...</h2>
+    //         </div>
+    //     )
+    // }
 
     const handleStartGroupDragCopy = useCallback((blockIds: string[], startPoint: { x: number, y: number }) => {
         // Create ghost copies at the start positions
@@ -82,8 +123,7 @@ export default function Canvas() {
         setDragGhosts(ghosts);
     }, [blocks]);
 
-
-
+      
     /**
      * Convert screen coordinates to SVG coordinates
      */
@@ -231,59 +271,76 @@ export default function Canvas() {
     /**
      * Handle position changes - move all selected blocks together
      */
-    const handleBlockPositionChange = useCallback((blockId: string, newPosition: { x: number, y: number, width: number, height: number }) => {
-        console.log('Canvas received position update:', blockId, newPosition);
+    // const handleBlockPositionChange = useCallback((blockId: string, newPosition: { x: number, y: number, width: number, height: number }) => {
+    //     console.log('Canvas received position update:', blockId, newPosition);
 
-        setBlocks(prevBlocks => {
-            const blockBeingDragged = prevBlocks.find(block => block.id === blockId)
-            if (!blockBeingDragged) return prevBlocks
+    //     setBlocks(prevBlocks => {
+    //         const blockBeingDragged = prevBlocks.find(block => block.id === blockId)
+    //         if (!blockBeingDragged) return prevBlocks
             
-            const snappedPosition = {
-                ...newPosition,
-                x: snapToGrid(newPosition.x, GRID_SIZE),
-                y: snapToGrid(newPosition.y, GRID_SIZE)
-            }
+    //         const snappedPosition = {
+    //             ...newPosition,
+    //             x: snapToGrid(newPosition.x, GRID_SIZE),
+    //             y: snapToGrid(newPosition.y, GRID_SIZE)
+    //         }
 
-            const currentSelection = selectedBlocksRef.current
+    //         const currentSelection = selectedBlocksRef.current
             
-            // Calculate delta movement from the current position in state
-            const deltaX = snappedPosition.x - blockBeingDragged.position.x
-            const deltaY = snappedPosition.y - blockBeingDragged.position.y
+    //         // Calculate delta movement from the current position in state
+    //         const deltaX = snappedPosition.x - blockBeingDragged.position.x
+    //         const deltaY = snappedPosition.y - blockBeingDragged.position.y
 
-            // NEW: Check for width/height changes too
-            const widthChanged = snappedPosition.width !== blockBeingDragged.position.width
-            const heightChanged = snappedPosition.height !== blockBeingDragged.position.height
+    //         // NEW: Check for width/height changes too
+    //         const widthChanged = snappedPosition.width !== blockBeingDragged.position.width
+    //         const heightChanged = snappedPosition.height !== blockBeingDragged.position.height
 
-            if (
-                Math.abs(deltaX) < 0.1 &&
-                Math.abs(deltaY) < 0.1 &&
-                !widthChanged &&
-                !heightChanged
-            ) {
-                return prevBlocks
-            }
+    //         if (
+    //             Math.abs(deltaX) < 0.1 &&
+    //             Math.abs(deltaY) < 0.1 &&
+    //             !widthChanged &&
+    //             !heightChanged
+    //         ) {
+    //             return prevBlocks
+    //         }
             
-            // Apply movement to all blocks
-            return prevBlocks.map(block => {
-                if (block.id === blockId) {
-                    // Update the dragged/resized block
-                    return { ...block, position: snappedPosition }
-                } else if (currentSelection.has(block.id) && currentSelection.size > 1) {
-                    // Move other selected blocks by the same delta (do not resize them)
-                    const newPos = {
-                        ...block.position,
-                        x: snapToGrid(block.position.x + deltaX, GRID_SIZE),
-                        y: snapToGrid(block.position.y + deltaY, GRID_SIZE)
-                    }
+    //         // Apply movement to all blocks
+    //         return prevBlocks.map(block => {
+    //             if (block.id === blockId) {
+    //                 // Update the dragged/resized block
+    //                 return { ...block, position: snappedPosition }
+    //             } else if (currentSelection.has(block.id) && currentSelection.size > 1) {
+    //                 // Move other selected blocks by the same delta (do not resize them)
+    //                 const newPos = {
+    //                     ...block.position,
+    //                     x: snapToGrid(block.position.x + deltaX, GRID_SIZE),
+    //                     y: snapToGrid(block.position.y + deltaY, GRID_SIZE)
+    //                 }
 
-                    return {
-                        ...block,
-                        position: newPos
-                    }
-                }
-                return block
-            })
-        })
+    //                 return {
+    //                     ...block,
+    //                     position: newPos
+    //                 }
+    //             }
+    //             return block
+    //         })
+    //     })
+    // }, [])
+    const handleBlockPositionChange = useCallback((blockId: string, newPosition: Position) => {
+        // IMPORTANT: Store the exact position that was passed in
+        setBlocks(prev => prev.map(block => 
+            block.id === blockId 
+                ? { 
+                    ...block, 
+                    position: { 
+                        // Use the EXACT values from newPosition, not snapped/modified values
+                        x: newPosition.x,
+                        y: newPosition.y,
+                        width: newPosition.width,
+                        height: newPosition.height
+                    } 
+                } 
+                : block
+        ))
     }, [])
 
    
@@ -513,16 +570,27 @@ const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: num
     ]   
 
     // Update the key function to be stable during drag operations
-    const getAdaptiveKey = useCallback((block: BlockData) => {
+    // const getAdaptiveKey = useCallback((block: BlockData) => {
+    //     if (isAnyBlockDragging) {
+    //         // During drag/resize, use only block ID for stability
+    //         return block.id
+    //     } else {
+    //         // When not dragging, use grid-snapped key for proper positioning
+    //         const snappedX = snapToGrid(block.position.x, GRID_SIZE)
+    //         const snappedY = snapToGrid(block.position.y, GRID_SIZE)
+    //         return `${block.id}-${snappedX}-${snappedY}`
+    //     }
+    // }, [isAnyBlockDragging])
+
+    const getStableKey = useCallback((block: BlockData) => {
+        // Use position only when NOT dragging to prevent flicker
+        // During drag, React will re-render based on state changes anyway
         if (isAnyBlockDragging) {
-            // During drag/resize, use only block ID for stability
             return block.id
-        } else {
-            // When not dragging, use grid-snapped key for proper positioning
-            const snappedX = snapToGrid(block.position.x, GRID_SIZE)
-            const snappedY = snapToGrid(block.position.y, GRID_SIZE)
-            return `${block.id}-${snappedX}-${snappedY}`
         }
+        
+        // When not dragging, include position for proper updates
+        return `${block.id}-${block.position.x}-${block.position.y}`
     }, [isAnyBlockDragging])
 
 
@@ -603,7 +671,7 @@ const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: num
                 {/* Render all blocks */}
                 {blocks.map(block => (
                     <Block
-                        key={getAdaptiveKey(block)}
+                        key={getStableKey(block)}
                         id={block.id}
                         blockType={block.blockType}
                         position={block.position}

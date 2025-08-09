@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { maskManager, MaskConfiguration } from '../../lib/MaskConfigManager'
+import { maskManager, type MaskConfiguration } from '../../lib/MaskConfigManager'
 
 /**
  * Represents a display element in the mask
@@ -214,7 +214,7 @@ export default function Mask({
                         height={resolveValue(element.height || height, 'height')}
                         fill={element.fill || 'white'}
                         stroke={selected ? '#007bff' : (element.stroke || 'black')}
-                        strokeWidth={selected ? 2 : (element.strokeWidth || 1)}
+                        strokeWidth={selected ? 5 : (element.strokeWidth || 1)}
                         rx={element.rx || 0}
                         ry={element.ry || 0}
                         {...shadowProps}
@@ -246,7 +246,7 @@ export default function Mask({
                         d={scalePath(element.path || '')}
                         fill={element.fill || 'none'}
                         stroke={selected ? '#007bff' : (element.stroke || 'black')}
-                        strokeWidth={selected ? 2 : (element.strokeWidth || 1)}
+                        strokeWidth={selected ? 5 : (element.strokeWidth || 1)}
                         transform={`translate(${x}, ${y})`}
                         {...shadowProps}
                     />
@@ -279,7 +279,7 @@ export default function Mask({
                     height={height}
                     fill="white"
                     stroke={selected ? '#007bff' : 'black'}
-                    strokeWidth={selected ? 2 : 1}
+                    strokeWidth={selected ? 5 : 1}
                     rx={2}
                 />
                 <text

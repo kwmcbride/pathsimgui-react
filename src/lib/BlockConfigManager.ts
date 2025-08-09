@@ -1,178 +1,101 @@
-interface BlockParameter {
-    name: string
-    displayName: string
-    type: 'string' | 'number' | 'boolean'
-    defaultValue: string | number | boolean
-    description?: string
-    required?: boolean
-    validation?: {
-        min?: number
-        max?: number
-    }
-    options?: string[]
-}
-
-interface BlockPortConfig {
-    inputs: number
-    outputs: number
-}
-
-interface BlockStyling {
-    defaultSize: {
-        width: number
-        height: number
-    }
-    color: string
-    borderColor: string
-    textColor: string
-    iconPath?: string
-}
-
-interface BlockSimulation {
-    canBeSubsystem: boolean
-    executionOrder: number
-    sampleTime: string
-}
-
 export interface BlockConfiguration {
     blockType: string
     displayName: string
     description: string
     pathsimClass: string
     category: string
-    ports: BlockPortConfig
-    parameters: BlockParameter[]
-    styling: BlockStyling
-    simulation: BlockSimulation
+    ports: {
+        inputs: number
+        outputs: number
+    }
+    parameters: any[]
+    styling: {
+        defaultSize: {
+            width: number
+            height: number
+        }
+        color: string
+        borderColor: string
+        textColor: string
+    }
+    simulation: {
+        canBeSubsystem: boolean
+        executionOrder: number
+        sampleTime: string
+    }
 }
 
-/**
- * Manages block configurations loaded from JSON files
- */
 class BlockConfigManager {
-    private configurations: Map<string, BlockConfiguration> = new Map()
-    private categories: Map<string, string[]> = new Map()
+    private configurations = new Map<string, BlockConfiguration>()
+    private isInitialized = false
 
-    /**
-     * Load a block configuration from a JSON file
-     * @param blockType The type of block to load
-     * @returns Promise<BlockConfiguration>
-     */
-    async loadBlockConfig(blockType: string): Promise<BlockConfiguration> {
-        try {
-            // Check if already loaded
-            if (this.configurations.has(blockType)) {
-                return this.configurations.get(blockType)!
-            }
+    async initialize(): Promise<void> {
+        if (this.isInitialized) return
 
-            // Load from JSON file
-            const response = await fetch(`/src/lib/${blockType.toLowerCase()}.json`)
-            if (!response.ok) {
-                throw new Error(`Failed to load configuration for ${blockType}`)
-            }
-
-            const config: BlockConfiguration = await response.json()
+        // List all your block types here
+        const blockTypes = ['gain', 'constant'] //, 'sum', 'integrator', 'scope']
+        
+        const loadPromises = blockTypes.map(async (blockType) => {
+    try {
+        const url = `/lib/${blockType.toLowerCase()}.json`
+        console.log(`🔍 Trying to fetch: ${url}`)
+        
+        const response = await fetch(url)
+        console.log(`📡 Response for ${blockType}:`, response.status, response.statusText)
+        
+        if (response.ok) {
+            const text = await response.text()
+            console.log(`📄 Raw response for ${blockType}:`, text.substring(0, 100))
             
-            // Validate configuration
-            this.validateConfiguration(config)
-            
-            // Store in cache
+            const config: BlockConfiguration = JSON.parse(text)
             this.configurations.set(blockType, config)
-            
-            // Update categories
-            this.updateCategories(config)
-            
-            return config
-        } catch (error) {
-            console.error(`Error loading block configuration for ${blockType}:`, error)
-            throw error
+            console.log(`✓ Loaded config for ${blockType}`)
+        } else {
+            console.warn(`❌ Could not load ${blockType}.json - Status: ${response.status}`)
+            this.configurations.set(blockType, this.createFallbackConfig(blockType))
+        }
+    } catch (error) {
+        console.warn(`💥 Error loading ${blockType}:`, error)
+        this.configurations.set(blockType, this.createFallbackConfig(blockType))
+    }
+})
+        
+        await Promise.all(loadPromises)
+        this.isInitialized = true
+        console.log('✓ BlockConfigManager initialized')
+    }
+
+    private createFallbackConfig(blockType: string): BlockConfiguration {
+        return {
+            blockType,
+            displayName: blockType,
+            description: '',
+            pathsimClass: '',
+            category: 'basic',
+            ports: { inputs: 1, outputs: 1 },
+            parameters: [],
+            styling: {
+                defaultSize: { width: 100, height: 60 },
+                color: '#f0f0f0',
+                borderColor: '#ccc',
+                textColor: '#333'
+            },
+            simulation: {
+                canBeSubsystem: false,
+                executionOrder: 1,
+                sampleTime: '0.1'
+            }
         }
     }
 
-    /**
-     * Load all available block configurations
-     */
-    async loadAllConfigurations(): Promise<void> {
-        // List of available block types - this could be dynamic
-        const blockTypes = ['constant', 'gain', 'sum', 'integrator', 'scope']
-        
-        const loadPromises = blockTypes.map(blockType => 
-            this.loadBlockConfig(blockType).catch(error => {
-                console.warn(`Could not load ${blockType}:`, error)
-                return null
-            })
-        )
-        
-        await Promise.all(loadPromises)
-    }
-
-    /**
-     * Get configuration for a specific block type
-     */
     getConfiguration(blockType: string): BlockConfiguration | null {
         return this.configurations.get(blockType) || null
     }
 
-    /**
-     * Get all available block types
-     */
-    getAvailableBlockTypes(): string[] {
-        return Array.from(this.configurations.keys())
-    }
-
-    /**
-     * Get blocks by category
-     */
-    getBlocksByCategory(category: string): string[] {
-        return this.categories.get(category) || []
-    }
-
-    /**
-     * Get all categories
-     */
-    getCategories(): string[] {
-        return Array.from(this.categories.keys())
-    }
-
-    /**
-     * Create default parameters for a block type
-     */
-    createDefaultParameters(blockType: string): BlockParameter[] {
-        const config = this.getConfiguration(blockType)
-        if (!config) return []
-
-        return config.parameters.map(param => ({
-            name: param.name,
-            value: param.defaultValue,
-            type: param.type,
-            description: param.description
-        }))
-    }
-
-    /**
-     * Validate block configuration
-     */
-    private validateConfiguration(config: BlockConfiguration): void {
-        if (!config.blockType || !config.pathsimClass) {
-            throw new Error('Block configuration must have blockType and pathsimClass')
-        }
-        
-        if (!config.ports || typeof config.ports.inputs !== 'number' || typeof config.ports.outputs !== 'number') {
-            throw new Error('Block configuration must have valid port configuration')
-        }
-    }
-
-    /**
-     * Update categories mapping
-     */
-    private updateCategories(config: BlockConfiguration): void {
-        const category = config.category
-        if (!this.categories.has(category)) {
-            this.categories.set(category, [])
-        }
-        this.categories.get(category)!.push(config.blockType)
+    isReady(): boolean {
+        return this.isInitialized
     }
 }
 
-// Export singleton instance
-export const blockConfigManager = new BlockConfigManager()
+const blockConfigManager = new BlockConfigManager()
+export default blockConfigManager
