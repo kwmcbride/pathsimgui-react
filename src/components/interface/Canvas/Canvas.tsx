@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import Block from '../../Block/Block'
 import ContextMenu from '../ContextMenu/ContextMenu'
 import styles from './Canvas.module.css'
@@ -86,6 +86,9 @@ export default function Canvas() {
 
     const canvasRef = useRef<SVGSVGElement>(null)
     const isSelectionDragging = useRef(false)
+
+    const selectedBlocksArray = useMemo(() => Array.from(selectedBlocks), [selectedBlocks]);
+
 
     // Load configs on startup
     useEffect(() => {
@@ -269,79 +272,72 @@ export default function Canvas() {
     }, [selectedBlocks])
 
     /**
-     * Handle position changes - move all selected blocks together
+     * Handle block position changes (dragging/resizing)
      */
-    // const handleBlockPositionChange = useCallback((blockId: string, newPosition: { x: number, y: number, width: number, height: number }) => {
-    //     console.log('Canvas received position update:', blockId, newPosition);
-
-    //     setBlocks(prevBlocks => {
-    //         const blockBeingDragged = prevBlocks.find(block => block.id === blockId)
-    //         if (!blockBeingDragged) return prevBlocks
-            
-    //         const snappedPosition = {
-    //             ...newPosition,
-    //             x: snapToGrid(newPosition.x, GRID_SIZE),
-    //             y: snapToGrid(newPosition.y, GRID_SIZE)
-    //         }
-
-    //         const currentSelection = selectedBlocksRef.current
-            
-    //         // Calculate delta movement from the current position in state
-    //         const deltaX = snappedPosition.x - blockBeingDragged.position.x
-    //         const deltaY = snappedPosition.y - blockBeingDragged.position.y
-
-    //         // NEW: Check for width/height changes too
-    //         const widthChanged = snappedPosition.width !== blockBeingDragged.position.width
-    //         const heightChanged = snappedPosition.height !== blockBeingDragged.position.height
-
-    //         if (
-    //             Math.abs(deltaX) < 0.1 &&
-    //             Math.abs(deltaY) < 0.1 &&
-    //             !widthChanged &&
-    //             !heightChanged
-    //         ) {
-    //             return prevBlocks
-    //         }
-            
-    //         // Apply movement to all blocks
-    //         return prevBlocks.map(block => {
-    //             if (block.id === blockId) {
-    //                 // Update the dragged/resized block
-    //                 return { ...block, position: snappedPosition }
-    //             } else if (currentSelection.has(block.id) && currentSelection.size > 1) {
-    //                 // Move other selected blocks by the same delta (do not resize them)
-    //                 const newPos = {
-    //                     ...block.position,
-    //                     x: snapToGrid(block.position.x + deltaX, GRID_SIZE),
-    //                     y: snapToGrid(block.position.y + deltaY, GRID_SIZE)
-    //                 }
-
-    //                 return {
-    //                     ...block,
-    //                     position: newPos
-    //                 }
-    //             }
-    //             return block
-    //         })
-    //     })
-    // }, [])
     const handleBlockPositionChange = useCallback((blockId: string, newPosition: Position) => {
-        // IMPORTANT: Store the exact position that was passed in
-        setBlocks(prev => prev.map(block => 
-            block.id === blockId 
-                ? { 
-                    ...block, 
-                    position: { 
-                        // Use the EXACT values from newPosition, not snapped/modified values
-                        x: newPosition.x,
-                        y: newPosition.y,
-                        width: newPosition.width,
-                        height: newPosition.height
-                    } 
-                } 
-                : block
-        ))
-    }, [])
+        setBlocks(prev => {
+            const block = prev.find(b => b.id === blockId)
+            if (!block) return prev
+
+            const isResize =
+                newPosition.width !== block.position.width ||
+                newPosition.height !== block.position.height
+
+            // If this is a resize, ONLY update the resized block.
+            // (Previous logic treated any x/y change as a drag and propagated delta to the group.)
+            if (isResize) {
+                // No actual change
+                if (
+                    block.position.x === newPosition.x &&
+                    block.position.y === newPosition.y &&
+                    block.position.width === newPosition.width &&
+                    block.position.height === newPosition.height
+                ) return prev
+
+                return prev.map(b =>
+                    b.id === blockId
+                        ? {
+                            ...b,
+                            position: {
+                                x: snapToGrid(newPosition.x, GRID_SIZE),
+                                y: snapToGrid(newPosition.y, GRID_SIZE),
+                                width: snapToGrid(newPosition.width, GRID_SIZE),
+                                height: snapToGrid(newPosition.height, GRID_SIZE)
+                            }
+                        }
+                        : b
+                )
+            }
+
+            // Drag logic (no size change)
+            const deltaX = newPosition.x - block.position.x
+            const deltaY = newPosition.y - block.position.y
+            if (Math.abs(deltaX) < 0.1 && Math.abs(deltaY) < 0.1) return prev
+
+            return prev.map(b => {
+                if (b.id === blockId) {
+                    return {
+                        ...b,
+                        position: {
+                            ...b.position,
+                            x: snapToGrid(newPosition.x, GRID_SIZE),
+                            y: snapToGrid(newPosition.y, GRID_SIZE)
+                        }
+                    }
+                } else if (selectedBlocks.has(b.id) && selectedBlocks.size > 1) {
+                    return {
+                        ...b,
+                        position: {
+                            ...b.position,
+                            x: snapToGrid(b.position.x + deltaX, GRID_SIZE),
+                            y: snapToGrid(b.position.y + deltaY, GRID_SIZE)
+                        }
+                    }
+                }
+                return b
+            })
+        })
+    }, [selectedBlocks])
 
    
     /**
@@ -365,116 +361,72 @@ export default function Canvas() {
      * Handle right-click context menu on blocks OR duplicate creation
      */
     // Add a mouse up handler to the document when drag-copy starts
-const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: number, deltaY: number, anchorId?: string) => {
-    // Handle duplication (single or group)
-    if (blockIdOrAction.startsWith('duplicate:')) {
-        const [, originalId, type] = blockIdOrAction.split(':');
+    const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: number, deltaY: number, anchorId?: string) => {
+        // Handle duplication (single or group)
+        if (blockIdOrAction.startsWith('duplicate:')) {
+            const [, originalId, type] = blockIdOrAction.split(':');
 
-        // GROUP DUPLICATION
-        if (type === 'group' && selectedBlocks.size > 1 && selectedBlocks.has(originalId)) {
-            const newBlocks: BlockData[] = [];
-            const newBlockIds: string[] = [];
+            // GROUP DUPLICATION
+            if (type === 'group' && selectedBlocks.size > 1 && selectedBlocks.has(originalId)) {
+                const newBlocks: BlockData[] = [];
+                const newBlockIds: string[] = [];
+                
+                const anchorBlock = blocks.find(b => b.id === anchorId || originalId);
+
+                selectedBlocks.forEach(blockId => {
+                    const originalBlock = blocks.find(b => b.id === blockId);
+                    if (originalBlock && anchorBlock) {
+                        // Calculate offset from anchor block
+                        const offsetX = originalBlock.position.x - anchorBlock.position.x;
+                        const offsetY = originalBlock.position.y - anchorBlock.position.y;
+                        const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        newBlockIds.push(newBlockId);
+                        newBlocks.push({
+                            ...originalBlock,
+                            id: newBlockId,
+                            position: {
+                                ...originalBlock.position,
+                                x: snapToGrid(anchorBlock.position.x + deltaX + offsetX, GRID_SIZE),
+                                y: snapToGrid(anchorBlock.position.y + deltaY + offsetY, GRID_SIZE)
+                            }
+                        });
+                    }
+                });
+
+                setBlocks(prev => [...prev, ...newBlocks]);
+                setGhostBlockIds(new Set(newBlockIds));
+                setSelectedBlocks(new Set(newBlockIds));
+                requestAnimationFrame(() => {
+                    setGhostBlockIds(new Set());
+                });
+                return;
             
-            const anchorBlock = blocks.find(b => b.id === anchorId || originalId);
+            }
 
-            selectedBlocks.forEach(blockId => {
-                const originalBlock = blocks.find(b => b.id === blockId);
-                if (originalBlock && anchorBlock) {
-                    // Calculate offset from anchor block
-                    const offsetX = originalBlock.position.x - anchorBlock.position.x;
-                    const offsetY = originalBlock.position.y - anchorBlock.position.y;
-                    const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                    newBlockIds.push(newBlockId);
-                    newBlocks.push({
-                        ...originalBlock,
-                        id: newBlockId,
-                        position: {
-                            ...originalBlock.position,
-                            x: snapToGrid(anchorBlock.position.x + deltaX + offsetX, GRID_SIZE),
-                            y: snapToGrid(anchorBlock.position.y + deltaY + offsetY, GRID_SIZE)
-                        }
-                    });
-                }
-            });
+            // SINGLE BLOCK DUPLICATION
+            const originalBlock = blocks.find(block => block.id === originalId);
+            if (originalBlock) {
+                const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                const newBlock: BlockData = {
+                    ...originalBlock,
+                    id: newBlockId,
+                    position: {
+                        x: snapToGrid(originalBlock.position.x + deltaX, GRID_SIZE),
+                        y: snapToGrid(originalBlock.position.y + deltaY, GRID_SIZE),
+                        width: originalBlock.position.width,
+                        height: originalBlock.position.height
+                    }
+                };
+                setBlocks(prev => [...prev, newBlock]);
+                setGhostBlockIds(new Set([newBlockId]));
+                setSelectedBlocks(new Set([newBlockId]));
 
-            setBlocks(prev => [...prev, ...newBlocks]);
-            setGhostBlockIds(new Set(newBlockIds));
-            setSelectedBlocks(new Set(newBlockIds));
-            requestAnimationFrame(() => {
-                setGhostBlockIds(new Set());
-            });
+                requestAnimationFrame(() => {
+                    setGhostBlockIds(new Set());
+                });
+            }
             return;
-            // const firstBlock = blocks.find(b => b.id === originalId);
-            // if (!firstBlock) return;
-
-            // const offsetX = snapToGrid(x - firstBlock.position.x, GRID_SIZE);
-            // const offsetY = snapToGrid(y - firstBlock.position.y, GRID_SIZE);
-
-            // selectedBlocks.forEach(blockId => {
-            //     const originalBlock = blocks.find(b => b.id === blockId);
-            //     if (originalBlock) {
-            //         const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            //         newBlockIds.push(newBlockId);
-            //         newBlocks.push({
-            //             ...originalBlock,
-            //             id: newBlockId,
-            //             position: {
-            //                 ...originalBlock.position,
-            //                 x: snapToGrid(originalBlock.position.x + offsetX, GRID_SIZE),
-            //                 y: snapToGrid(originalBlock.position.y + offsetY, GRID_SIZE)
-            //             }
-            //         });
-            //     }
-            // });
-
-            // setBlocks(prev => [...prev, ...newBlocks]);
-            // setGhostBlockIds(new Set(newBlockIds)); // Ghost only the new blocks
-            // console.log('Ghost block IDs set:', newBlockIds);
-            // setSelectedBlocks(new Set(newBlockIds)); // Select the new blocks
-
-            // // setTimeout(() => {
-            // //     setGhostBlockIds(new Set());
-            // //     console.log('Ghost block IDs cleared after duplication');
-            // // }, 0);
-
-            // requestAnimationFrame(() => {
-            //     setGhostBlockIds(new Set());
-            //     console.log('Ghost block IDs cleared after duplication');
-            // });
-
-            // // Remove ghosting on mouse up
-            // const handleMouseUp = () => {
-            //     setGhostBlockIds(new Set());
-            //     document.removeEventListener('mouseup', handleMouseUp);
-            // };
-            // document.addEventListener('mouseup', handleMouseUp);
-            // return;
         }
-
-        // SINGLE BLOCK DUPLICATION
-        const originalBlock = blocks.find(block => block.id === originalId);
-        if (originalBlock) {
-            const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            const newBlock: BlockData = {
-                ...originalBlock,
-                id: newBlockId,
-                position: {
-                    x: snapToGrid(originalBlock.position.x + deltaX, GRID_SIZE),
-                    y: snapToGrid(originalBlock.position.y + deltaY, GRID_SIZE),
-                    width: originalBlock.position.width,
-                    height: originalBlock.position.height
-                }
-            };
-            setBlocks(prev => [...prev, newBlock]);
-            setGhostBlockIds(new Set([newBlockId]));
-            setSelectedBlocks(new Set([newBlockId]));
-
-            requestAnimationFrame(() => {
-                setGhostBlockIds(new Set());
-            });
-        }
-        return;
-    }
 
     // Regular context menu (not duplication)
     setGhostBlockIds(new Set());
@@ -643,6 +595,13 @@ const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: num
                 viewBox="0 0 2400 1600"
                 onMouseDown={handleCanvasMouseDown}
                 onClick={closeContextMenu}
+                style={{
+                    userSelect: 'none',           // Prevent text selection
+                    WebkitUserSelect: 'none',     // Safari
+                    MozUserSelect: 'none',        // Firefox
+                    msUserSelect: 'none',         // IE/Edge
+                    cursor: 'default'             // Ensure default cursor
+                }}
             >
                 <rect 
                     x="0" 
@@ -671,14 +630,14 @@ const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: num
                 {/* Render all blocks */}
                 {blocks.map(block => (
                     <Block
-                        key={getStableKey(block)}
+                        key={block.id}
                         id={block.id}
                         blockType={block.blockType}
                         position={block.position}
                         parameters={block.parameters}
                         selected={selectedBlocks.has(block.id)}
                         ghost={ghostBlockIds.has(block.id)} // Fix: was "gghost"
-                        selectedBlocks={Array.from(selectedBlocks)}
+                        selectedBlocks={selectedBlocksArray}
                         onStartGroupDragCopy={handleStartGroupDragCopy}
                         onParameterChange={handleBlockParameterChange}
                         onPositionChange={handleBlockPositionChange}
@@ -689,10 +648,30 @@ const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: num
                     />
                 ))}
                 
-                <text x="600" y="400" textAnchor="middle" fontSize="48" fill="#333">
+                <text 
+                    x="600" 
+                    y="400" 
+                    textAnchor="middle" 
+                    fontSize="48" 
+                    fill="#333"
+                    style={{ 
+                        userSelect: 'none', 
+                        pointerEvents: 'none'  // This is key - makes text non-interactive
+                    }}
+                >
                     Canvas Component
                 </text>
-                <text x="600" y="500" textAnchor="middle" fontSize="24" fill="#666">
+                <text 
+                    x="600" 
+                    y="500" 
+                    textAnchor="middle" 
+                    fontSize="24" 
+                    fill="#666"
+                    style={{ 
+                        userSelect: 'none', 
+                        pointerEvents: 'none'  // This is key - makes text non-interactive
+                    }}
+                >
                     {blocks.length} blocks on canvas ({selectedBlocks.size} selected)
                 </text>
             </svg>

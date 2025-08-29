@@ -1,0 +1,46 @@
+{
+    "blocks": {
+        "snapToGrid": true,
+        "gridSize": 5,
+        "minWidth": 50,
+        "minHeight": 50,
+        "defaultWidth": 100,
+        "defaultHeight": 60,
+        "borderColor": "#000000",
+        "selectedBorderColor": "#ff0000",
+        "hoverBorderColor": "#00ff00",
+        "borderWidth": 2,
+        "backgroundColor": "#f0f0f0",
+        "headerColor": "#d0d0d0",
+        "headerHeight": 20,
+        "labelFontFamily": "Arial, sans-serif",
+        "labelFontSize": 12,
+        "maskFontColor": "#000000",
+        "labelFontColor": "#808080",
+        "selectedFontColor": "#ff0000",
+        "hoverFontColor": "#00ff00",
+        "portRadius": 8,
+        "portColor": "#0000ff",
+        "portHoverColor": "#00ffff",
+        "portSelectedColor": "#ff00ff",
+        "portSpacing": 15,
+        "resizeHandleSize": 8,
+        "resizeHandleColor": "#888888",
+        "minDistanceDragStart": 3,
+        "copyOpacity": 0.5,
+        "resizeHandleActiveDistance": 16
+    },
+    "canvas": {
+        "backgroundColor": "#ffffff",
+        "gridColor": "#e0e0e0",
+        "gridSize": 10,
+        "showGrid": true,
+        "snapToGrid": true
+    },
+    "connections": {
+        "defaultColor": "#000000",
+        "selectedColor": "#ff0000",
+        "hoverColor": "#00ff00",
+        "width": 2      
+    }
+}

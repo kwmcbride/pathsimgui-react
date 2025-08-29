@@ -3,6 +3,7 @@ import Port from '../Port/Port'
 import Mask from '../Mask/Mask'
 import blockConfigManager from '../../lib/BlockConfigManager'
 import { snapToGrid, GRID_SIZE } from '../../utilities/grid'
+import generalConfig from '../../config/generalConfig'
 
 /**
  * Represents the position and size of a block on the canvas.
@@ -84,24 +85,28 @@ function Block({
 }: BlockProps) {
     // State hooks, these need to be at the top
 
+    // console.log(`🔄 Block ${id} rendering. Position:`, initialPosition, 'Selected:', selected)
+    const config = generalConfig.blocks;
+
+    // Seems redundant
     const blockConfig = blockConfigManager.getConfiguration(blockType) || {
         blockType,
         displayName: blockType,
         ports: { inputs: 1, outputs: 1 },
         styling: {
-            defaultSize: { width: 100, height: 60 },
-            color: '#f0f0f0',
-            borderColor: '#ccc',
-            textColor: '#333'
+            defaultSize: { width: config.defaultWidth, height: config.defaultHeight },
+            color: config.backgroundColor,
+            borderColor: config.borderColor,
+            textColor: config.fontColor
         }}
 
     // Block styling
     const blockStyle: BlockStyle = {
-        fill: blockConfig?.styling.color || 'white',
-        stroke: selected ? 'blue' : (blockConfig?.styling.borderColor || 'black'),
-        strokeWidth: selected ? 2 : 1,
-        resizeCornerSize: 8, // Increased from 8 for easier grabbing
-        portSize: 8
+        fill: blockConfig?.styling.color || config.backgroundColor,
+        stroke: selected ? config.selectedBorderColor : (blockConfig?.styling.borderColor || config.borderColor),
+        strokeWidth: selected ? config.borderWidth : 1,
+        resizeCornerSize: config.resizeHandleSize,
+        portSize: config.portRadius
     }
 
     // Position and size of the block
@@ -115,7 +120,6 @@ function Block({
         }
         return initialPos
     })
-
 
     // State for selection and interaction
     // const [selected, setSelected] = useState(false)
@@ -141,6 +145,7 @@ function Block({
     const isDraggingRef = useRef(false)
     const clickCountRef = useRef(0)
     const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const throttleRef = useRef<NodeJS.Timeout | null>(null)
 
     const resizeStartRef = useRef({ x: 0, y: 0 })
     const initialSizeRef = useRef({ width: 0, height: 0 })
@@ -148,72 +153,52 @@ function Block({
     const isResizingRef = useRef(false)  // Add this line
 
     const initialPositionRef = useRef({ x: 0, y: 0 })
-    // Effects to load block configuration - might not be necessary if config is static
-    /**
-     * Loads block configuration from JSON when blockType changes.
-     * Sets default parameters if none are provided.
-     */
-    // useEffect(() => {
-    //     async function loadConfigs() {
-    //         try {
-    //             await blockConfigManager.initialize()
-    //             setConfigsLoaded(true)
-    //         } catch (error) {
-    //             console.error('Failed to load block configurations:', error)
-    //             setConfigsLoaded(true)
-    //         }
-    //     }
-    //     loadConfigs()
-    // }, [])
+    
+    // Also update your position sync effect to be less restrictive:
+    useEffect(() => {
+    // Guard: need valid incoming coords
+    if (initialPosition.x == null || initialPosition.y == null) return
 
-        // Replace the hardcoded blockConfig object with this:
-        // const blockConfig = blockConfigManager.getConfiguration(blockType) || {
-        //     blockType,
-        //     displayName: blockType,
-        //     ports: { inputs: 1, outputs: 1 },
-        //     styling: {
-        //         defaultSize: { width: 100, height: 60 },
-        //         color: '#f0f0f0',
-        //         borderColor: '#ccc',
-        //         textColor: '#333'
-        //     }
-        // }
-
-// Replace the position sync effect with this version that uses a different approach
-
-useEffect(() => {
-    // Skip position sync if we're in the middle of a user interaction
-    if (isResizingRef.current || isDraggingRef.current) {
-        return;
-    }
-    
-    // Skip if there's any ongoing transform/drag
-    if (dragOffset.x !== 0 || dragOffset.y !== 0) {
-        return;
-    }
-    
-    // IMPORTANT: Skip sync if positions match to prevent loops
-    if (position.x === initialPosition.x && 
-        position.y === initialPosition.y &&
-        position.width === initialPosition.width &&
-        position.height === initialPosition.height) {
-        return;
-    }
-    
-    // Skip sync if we have invalid position data
-    if (initialPosition.x === undefined || initialPosition.y === undefined) {
-        return;
-    }
-    
-    console.log('Syncing position from props:', initialPosition);
-    setPosition({
+    const incoming = {
         x: initialPosition.x,
         y: initialPosition.y,
         width: initialPosition.width ?? position.width,
         height: initialPosition.height ?? position.height
-    });
-    
-}, [initialPosition.x, initialPosition.y, initialPosition.width, initialPosition.height])
+    }
+
+    const changed =
+        incoming.x !== position.x ||
+        incoming.y !== position.y ||
+        incoming.width !== position.width ||
+        incoming.height !== position.height
+
+    if (!changed) return
+
+    // If dragging a single block we are already updating local state in handleMouseMove;
+    // letting parent overwrite every frame can introduce jitter. So skip during single drag.
+    if (isDraggingRef.current) {
+        const isGroupDrag = selected && selectedBlocks && selectedBlocks.length > 1
+        if (!isGroupDrag) {
+            // Single-block drag: ignore parent updates mid-drag
+            return
+        }
+        // Group drag: accept parent updates so lead block moves with the group
+    }
+
+    setPosition(incoming)
+}, [
+    initialPosition.x,
+    initialPosition.y,
+    initialPosition.width,
+    initialPosition.height,
+    selected,
+    selectedBlocks,
+    position.x,
+    position.y,
+    position.width,
+    position.height
+])
+
     /**
      * Updates block size to match config defaults if not set in initialPosition.
      */
@@ -315,16 +300,6 @@ useEffect(() => {
         }
     }, [position.width, position.height])
 
-    // If you have parameter ports or other port types, update them similarly:
-    // const calculateParameterPortPosition = useCallback((index: number, totalPorts: number) => {
-    //     const spacing = totalPorts > 1 ? (position.width - 20) / (totalPorts - 1) : 0
-    //     const baseX = 10 + index * spacing
-        
-    //     return {
-    //         x: snapToGrid(baseX, GRID_SIZE), // Snap to grid
-    //         y: 0 // Top of block
-    //     }
-    // }, [position.width])
 
     /**
      * Handles updates to block parameters from the parameter dialog.
@@ -358,7 +333,7 @@ useEffect(() => {
         }
         
         const currentMouse = getSVGMousePosition(e);
-        console.log('Current mouse position:', currentMouse);
+        // console.log('Current mouse position:', currentMouse);
         const handle = resizeHandleRef.current;
         
         const deltaX = currentMouse.x - resizeStartRef.current.x;
@@ -371,33 +346,33 @@ useEffect(() => {
         
         switch (handle) {
             case 'nw':
-                newWidth = Math.max(50, initialSizeRef.current.width - deltaX);
-                newHeight = Math.max(30, initialSizeRef.current.height - deltaY);
+                newWidth = Math.max(config.minWidth, initialSizeRef.current.width - deltaX);
+                newHeight = Math.max(config.minHeight, initialSizeRef.current.height - deltaY);
                 newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth);
                 newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight);
                 break;
             case 'ne':
-                newWidth = Math.max(50, initialSizeRef.current.width + deltaX);
-                newHeight = Math.max(30, initialSizeRef.current.height - deltaY);
+                newWidth = Math.max(config.minWidth, initialSizeRef.current.width + deltaX);
+                newHeight = Math.max(config.minHeight, initialSizeRef.current.height - deltaY);
                 newY = initialPositionRef.current.y + (initialSizeRef.current.height - newHeight);
                 break;
             case 'sw':
-                newWidth = Math.max(50, initialSizeRef.current.width - deltaX);
-                newHeight = Math.max(30, initialSizeRef.current.height + deltaY);
+                newWidth = Math.max(config.minWidth, initialSizeRef.current.width - deltaX);
+                newHeight = Math.max(config.minHeight, initialSizeRef.current.height + deltaY);
                 newX = initialPositionRef.current.x + (initialSizeRef.current.width - newWidth);
                 break;
             case 'se':
-                newWidth = Math.max(50, initialSizeRef.current.width + deltaX);
-                newHeight = Math.max(30, initialSizeRef.current.height + deltaY);
+                newWidth = Math.max(config.minWidth, initialSizeRef.current.width + deltaX);
+                newHeight = Math.max(config.minHeight, initialSizeRef.current.height + deltaY);
                 break;
         }
 
         onPositionChange?.(id, {
-    x: newX,
-    y: newY,
-    width: newWidth,
-    height: newHeight
-});
+            x: newX,
+            y: newY,
+            width: newWidth,
+            height: newHeight
+        });
         
         setPosition(currentPosition => {
             const newPosition = {
@@ -417,18 +392,19 @@ useEffect(() => {
                 return { ...newPosition };
             }
             
-            console.log('Setting new position:', newPosition);
-            console.log('Previous position was:', currentPosition);
+            // console.log('Setting new position:', newPosition);
+            // console.log('Previous position was:', currentPosition);
             return newPosition;
         });
 
-        console.log('Setting new position:', { x: newX, y: newY, width: newWidth, height: newHeight });
+        // console.log('Setting new position:', { x: newX, y: newY, width: newWidth, height: newHeight });
     }, [getSVGMousePosition]);
 
+    // Create stable resize up handler
     const handleResizeUp = useCallback(() => {
-        console.log('handleResizeUp called, isResizingRef was:', isResizingRef.current);
+        // console.log('handleResizeUp called, isResizingRef was:', isResizingRef.current);
         isResizingRef.current = false;  // Clear ref IMMEDIATELY
-        console.log('handleResizeUp set isResizingRef to:', isResizingRef.current);
+        // console.log('handleResizeUp set isResizingRef to:', isResizingRef.current);
         setIsResizing(false)
         resizeHandleRef.current = ''
         onDragEnd?.()
@@ -452,6 +428,7 @@ useEffect(() => {
         document.removeEventListener('mouseup', handleResizeUp)
     }, [id, onPositionChange, onDragEnd])
 
+
     /**
      * Handles mouse down on a resize handle.
      * Initiates resizing logic for the block.
@@ -460,7 +437,7 @@ useEffect(() => {
         console.log('handleResizeMouseDown called with handle:', handle);
         if (e.button === 0) { // Only handle left mouse button
 
-            e.stopPropagation();
+            // e.stopPropagation();
             e.preventDefault();
             
             // Set BOTH ref AND state to ensure effect sees the change
@@ -483,97 +460,120 @@ useEffect(() => {
         }
     }, [position, getSVGMousePosition, onDragStart]);
 
+
     /**
      * Handles mouse down on the block for drag, selection, and double-click.
      * Implements custom double-click detection to avoid React SVG event issues.
      */
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
-        
         if (e.button === 0) {
             e.preventDefault()
-            e.stopPropagation()
+            // e.stopPropagation()
 
             const svgMousePos = getSVGMousePosition(e)
-        
             dragStartRef.current = svgMousePos
             blockStartRef.current = { x: position.x, y: position.y }
             isDraggingRef.current = false
 
-            // Check for multi-select (Ctrl/Cmd key)
             const multiSelect = e.ctrlKey || e.metaKey
 
-            // Mouse move handler for dragging
             const handleMouseMove = (e: MouseEvent) => {
                 const currentMouse = getSVGMousePosition(e)
                 const deltaX = currentMouse.x - dragStartRef.current.x
                 const deltaY = currentMouse.y - dragStartRef.current.y
-                
-                // Start dragging if moved enough
-                if (!isDraggingRef.current && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
+
+                if (!isDraggingRef.current && (Math.abs(deltaX) > config.minDistanceDragStart || Math.abs(deltaY) > config.minDistanceDragStart)) {
                     isDraggingRef.current = true
                     setIsDragging(true)
                     onDragStart?.()
                 }
-        
+
                 if (isDraggingRef.current) {
-                    // Instead of JUST setting dragOffset, we need to update Canvas too
+                    const isGroupDrag = selected && selectedBlocks && selectedBlocks.length > 1
+
+                    // NEW: always compute snapped coords (single drag uses them locally)
+                    const rawX = blockStartRef.current.x + deltaX
+                    const rawY = blockStartRef.current.y + deltaY
+                    const snappedX = snapToGrid(rawX, GRID_SIZE)
+                    const snappedY = snapToGrid(rawY, GRID_SIZE)
+
+                    // Build position object (snapped so Canvas + local stay aligned)
                     const newPosition = {
                         ...position,
-                        x: blockStartRef.current.x + deltaX,
-                        y: blockStartRef.current.y + deltaY
+                        x: snappedX,
+                        y: snappedY
                     }
-                    
-                    // Set the drag offset for smooth visual movement
-                    setDragOffset({ x: deltaX, y: deltaY })
-                    
-                    // IMPORTANT: For proper group movement, we need to tell Canvas
-                    if (selected && onPositionChange) {
-                        // We'll update Canvas position but not internal position yet
-                        onPositionChange(id, newPosition)
+
+                    if (!isGroupDrag) {
+                        // Single-block drag: update local immediately (snapped)
+                        setPosition(prev =>
+                            prev.x === newPosition.x && prev.y === newPosition.y
+                                ? prev
+                                : newPosition
+                        )
+                    } else {
+                        // If the drag involves multiple blocks, we need to notify the parent
+                        // This is necessary to show the blocks moving together with some throttled renders
+                        // Group drag: need to notify parent for coordinated movement
+                        if (!throttleRef.current) {
+                            throttleRef.current = setTimeout(() => {
+                                onPositionChange?.(id, newPosition)
+                                throttleRef.current = null
+                            }, 16) // 60fps updates for smooth group drag
+                        }
                     }
                 }
             }
 
-            /**
-             * Handles mouse up to finalize drag or handle single/double click.
-             */
-            const handleMouseUp = () => {
-                if (isDraggingRef.current) {
-                    const finalPosition = {
-                        ...position,
-                        x: blockStartRef.current.x + dragOffset.x,
-                        y: blockStartRef.current.y + dragOffset.y
-                    };
-                    
-                    // CRITICAL CHANGE: Update position THROUGH PARENT ONLY
-                    // Don't call setPosition directly - let the sync effect handle it
-                    onPositionChange?.(id, finalPosition);
-                    
-                    // Reset drag offset after notifying parent
-                    setDragOffset({ x: 0, y: 0 });
-                    
-                    // Signal drag end
-                    onDragEnd?.();
+            const handleMouseUp = (e: MouseEvent) => {
+                // Flush any pending throttled update
+                if (throttleRef.current) {
+                    clearTimeout(throttleRef.current)
+                    throttleRef.current = null
                 }
-                
+
+                if (isDraggingRef.current) {
+                    
+                    // Use the mouse position at mouse up!
+                    const mouse = getSVGMousePosition(e);
+                    const deltaX = mouse.x - dragStartRef.current.x;
+                    const deltaY = mouse.y - dragStartRef.current.y;
+
+                    const rawX = blockStartRef.current.x + deltaX;
+                    const rawY = blockStartRef.current.y + deltaY;
+                    const snappedX = snapToGrid(rawX, GRID_SIZE);
+                    const snappedY = snapToGrid(rawY, GRID_SIZE);
+
+                    onPositionChange?.(id, {
+                        x: snappedX,
+                        y: snappedY,
+                        width: position.width,
+                        height: position.height
+                    });
+                    onDragEnd?.();
+                } else {
+                    onSelect?.(id, !selected, e && (e.ctrlKey || e.metaKey));
+                }
+
                 setIsDragging(false);
                 isDraggingRef.current = false;
                 document.removeEventListener('mousemove', handleMouseMove);
                 document.removeEventListener('mouseup', handleMouseUp);
-            }
-            document.addEventListener('mousemove', handleMouseMove)
-            document.addEventListener('mouseup', handleMouseUp)
+            };
+
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
         }
         else if (e.button === 2) {
             e.preventDefault();
-            e.stopPropagation();
+            // e.stopPropagation();
 
             const svgPoint = getSVGMousePosition(e);
             const startPoint = { x: svgPoint.x, y: svgPoint.y };
 
             // Get the block's current position
-            const blockX = initialPosition.x;
-            const blockY = initialPosition.y;
+            const blockX = position.x;
+            const blockY = position.y;
 
             // Calculate offset from pointer to block origin
             const offsetX = blockX - startPoint.x;
@@ -617,7 +617,7 @@ useEffect(() => {
                             if (originalElement) {
                                 const duplicateElement = originalElement.cloneNode(true) as SVGGElement;
                                 duplicateElement.id = `${blockId}_ghost`;
-                                duplicateElement.style.opacity = '0.5';
+                                duplicateElement.style.opacity = config.copyOpacity.toString();
                                 duplicateElement.style.pointerEvents = 'none';
                                 originalElement.parentElement?.appendChild(duplicateElement);
                                 duplicateElements.push(duplicateElement);
@@ -629,7 +629,7 @@ useEffect(() => {
                         if (originalElement) {
                             const duplicateElement = originalElement.cloneNode(true) as SVGGElement;
                             duplicateElement.id = `${id}_ghost`;
-                            duplicateElement.style.opacity = '0.5';
+                            duplicateElement.style.opacity = config.copyOpacity.toString();
                             duplicateElement.style.pointerEvents = 'none';
                             originalElement.parentElement?.appendChild(duplicateElement);
                             duplicateElements.push(duplicateElement);
@@ -682,85 +682,9 @@ useEffect(() => {
             document.addEventListener('mouseup', handleRightMouseUp);
             onDragEnd?.();
         }
-        //     e.preventDefault()
-        //     e.stopPropagation()
-            
-        //     const svgPoint = getSVGMousePosition(e)
-        //     const startPoint = { x: svgPoint.x, y: svgPoint.y }
-        //     const newDuplicateId = `${blockType.toLowerCase()}_${Date.now()}`
-            
-        //     let duplicateElement: SVGGElement | null = null
-        //     let dragThresholdMet = false
-        //     let duplicateCreated = false
-            
-        //     const handleRightMouseMove = (e: MouseEvent) => {
-        //         const currentPoint = getSVGMousePosition(e as any)
-        //         const deltaX = currentPoint.x - startPoint.x
-        //         const deltaY = currentPoint.y - startPoint.y
-        //         const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
-                
-        //         // Create duplicate DOM element directly without React
-        //         if (distance > 5 && !dragThresholdMet) {
-        //             dragThresholdMet = true
-        //             duplicateCreated = true
-                    
-        //             // Get the original block's SVG element
-        //             const originalElement = document.getElementById(`${id}-group`)
-        //             if (originalElement) {
-        //                 // Clone the original element
-        //                 duplicateElement = originalElement.cloneNode(true) as SVGGElement
-        //                 duplicateElement.id = `${newDuplicateId}-group`
-        //                 duplicateElement.style.opacity = '0.7'
-        //                 duplicateElement.style.pointerEvents = 'none'
-                        
-        //                 // Add to the same parent (the SVG canvas)
-        //                 originalElement.parentElement?.appendChild(duplicateElement)
-        //             }
-        //         }
-                
-        //         // Update duplicate position by directly manipulating the DOM
-        //         if (duplicateCreated && duplicateElement) {
-        //             const newX = currentPoint.x - position.width / 2
-        //             const newY = currentPoint.y - position.height / 2
-        //             duplicateElement.setAttribute('transform', `translate(${newX}, ${newY})`)
-        //         }
-        //     }
-            
-        //     const handleRightMouseUp = (e: MouseEvent) => {
-        //         // Clean up event listeners
-        //         document.removeEventListener('mousemove', handleRightMouseMove)
-        //         document.removeEventListener('mouseup', handleRightMouseUp)
-                
-        //         if (duplicateCreated && duplicateElement) {
-        //             // Get final position from the DOM element
-        //             const transform = duplicateElement.getAttribute('transform') || ''
-        //             const matches = transform.match(/translate\(([^,]+),\s*([^)]+)\)/)
-                    
-        //             if (matches) {
-        //                 const finalX = parseFloat(matches[1])
-        //                 const finalY = parseFloat(matches[2])
-                        
-        //                 // Remove the temporary DOM element
-        //                 duplicateElement.remove()
-                        
-        //                 // NOW create the React block with the final position
-        //                 if (onContextMenu) {
-        //                     onContextMenu(`duplicate:${id}:${newDuplicateId}`, finalX + position.width / 2, finalY + position.height / 2)
-        //                 }
-        //             }
-        //         } else {
-        //             // Show context menu
-        //             if (onContextMenu) {
-        //                 onContextMenu(id, e.clientX, e.clientY)
-        //             }
-        //         }
-        //     }
-            
-        //     // Add event listeners
-        //     document.addEventListener('mousemove', handleRightMouseMove)
-        //     document.addEventListener('mouseup', handleRightMouseUp)
-        // }
-    }, [position, getSVGMousePosition, id, blockType, onContextMenu, selected, onSelect, onDragStart, onDragEnd])
+    }, [position, getSVGMousePosition, id, blockType, onContextMenu, selected, onSelect, onDragStart, onDragEnd, onPositionChange, selectedBlocks])
+
+
     /**
      * Handle context menu event - prevent default to avoid browser menu
      */
@@ -777,9 +701,9 @@ useEffect(() => {
         <>
             <g
                 id={`${id}-group`}
-                transform={`translate(${position.x + dragOffset.x}, ${position.y + dragOffset.y})`}
+                transform={`translate(${position.x}, ${position.y})`}
                 style={{
-                    opacity: ghost ? 0.5 : 1, // <-- add this line
+                    opacity: ghost ? config.copyOpacity : 1,
                 }}
                 onMouseEnter={() => !isDragging && !isResizing && setShowResizeHandles(true)}
                 onMouseLeave={() => !isDragging && !isResizing && setShowResizeHandles(false)}
@@ -842,9 +766,9 @@ useEffect(() => {
                     x={position.width / 2}
                     y={position.height + 20}
                     textAnchor="middle"
-                    fontSize="12"
-                    fontFamily="sans-serif"
-                    fill="gray"
+                    fontSize={config.labelFontSize}
+                    fontFamily={config.labelFontFamily}
+                    fill={config.labelFontColor}
                     style={{ userSelect: 'none', pointerEvents: 'none' }}
                 >
                     {id}
@@ -857,10 +781,10 @@ useEffect(() => {
                         <g>
                             {/* Large invisible interactive area */}
                             <rect
-                                x={-16}
-                                y={-16}
-                                width={24}
-                                height={24}
+                                x={-config.resizeHandleActiveDistance}
+                                y={-config.resizeHandleActiveDistance}
+                                width={config.resizeHandleActiveDistance + config.resizeHandleSize}
+                                height={config.resizeHandleActiveDistance + config.resizeHandleSize}
                                 fill="transparent"
                                 style={{ cursor: 'nwse-resize' }}
                                 onMouseDown={(e) => handleResizeMouseDown(e, 'nw')}
@@ -881,10 +805,10 @@ useEffect(() => {
                         {/* Northeast resize handle */}
                         <g>
                             <rect
-                                x={position.width - 8}
-                                y={-16}
-                                width={24}
-                                height={24}
+                                x={position.width - config.resizeHandleActiveDistance - config.resizeHandleSize}
+                                y={-config.resizeHandleActiveDistance}
+                                width={config.resizeHandleActiveDistance + config.resizeHandleSize}
+                                height={config.resizeHandleActiveDistance + config.resizeHandleSize}
                                 fill="transparent"
                                 style={{ cursor: 'nesw-resize' }}
                                 onMouseDown={(e) => handleResizeMouseDown(e, 'ne')}
@@ -904,10 +828,10 @@ useEffect(() => {
                         {/* Southwest resize handle */}
                         <g>
                             <rect
-                                x={-16}
-                                y={position.height - 8}
-                                width={24}
-                                height={24}
+                                x={-config.resizeHandleActiveDistance}
+                                y={position.height - config.resizeHandleSize}
+                                width={config.resizeHandleActiveDistance + config.resizeHandleSize}
+                                height={config.resizeHandleActiveDistance + config.resizeHandleSize}
                                 fill="transparent"
                                 style={{ cursor: 'nesw-resize' }}
                                 onMouseDown={(e) => handleResizeMouseDown(e, 'sw')}
@@ -927,10 +851,10 @@ useEffect(() => {
                         {/* Southeast resize handle */}
                         <g>
                             <rect
-                                x={position.width - 8}
-                                y={position.height - 8}
-                                width={24}
-                                height={24}
+                                x={position.width - config.resizeHandleSize}
+                                y={position.height - config.resizeHandleSize}
+                                width={config.resizeHandleActiveDistance + config.resizeHandleSize}
+                                height={config.resizeHandleActiveDistance +config.resizeHandleSize}
                                 fill="transparent"
                                 style={{ cursor: 'nwse-resize' }}
                                 onMouseDown={(e) => handleResizeMouseDown(e, 'se')}
@@ -1087,17 +1011,25 @@ function ParameterDialog({
 
 // This prevents blocks from re-rendering unless their specific props change
 export default memo(Block, (prevProps, nextProps) => {
-  // Only re-render if something important changed
+  // Deep comparison for position values, not object references
   const positionChanged = 
-    prevProps.position.x !== nextProps.position.x ||
-    prevProps.position.y !== nextProps.position.y ||
-    prevProps.position.width !== nextProps.position.width ||
-    prevProps.position.height !== nextProps.position.height;
+    prevProps.position?.x !== nextProps.position?.x ||
+    prevProps.position?.y !== nextProps.position?.y ||
+    prevProps.position?.width !== nextProps.position?.width ||
+    prevProps.position?.height !== nextProps.position?.height;
   
   const selectionChanged = prevProps.selected !== nextProps.selected;
   const ghostChanged = prevProps.ghost !== nextProps.ghost;
   
+  // Also check other props that might cause unnecessary re-renders
+  const parametersChanged = 
+    JSON.stringify(prevProps.parameters) !== JSON.stringify(nextProps.parameters);
+  
+  const selectedBlocksChanged = 
+    prevProps.selectedBlocks?.length !== nextProps.selectedBlocks?.length ||
+    prevProps.selectedBlocks?.some((id, i) => id !== nextProps.selectedBlocks?.[i]);
+  
   // Return true if nothing important changed (skip re-render)
-  // Return false to trigger a re-render
-  return !positionChanged && !selectionChanged && !ghostChanged;
+  return !positionChanged && !selectionChanged && !ghostChanged && 
+         !parametersChanged && !selectedBlocksChanged;
 });
