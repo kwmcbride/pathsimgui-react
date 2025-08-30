@@ -38,6 +38,8 @@ interface Position {
 }
 
 export default function Canvas() {
+
+    // State for blocks on the canvas
     const [blocks, setBlocks] = useState<BlockData[]>([
         // Add some test blocks to start with
         {
@@ -54,7 +56,9 @@ export default function Canvas() {
         }
     ])
     
+    // Selection state
     const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set())
+    // Context menu state
     const [contextMenu, setContextMenu] = useState<ContextMenuState>({
         visible: false,
         x: 0,
@@ -77,16 +81,23 @@ export default function Canvas() {
         currentY: 0
     })
 
+    // Dragging state
     const [isAnyBlockDragging, setIsAnyBlockDragging] = useState(false)
+    // Group of blocks being copied
     const [dragCopyGroup, setDragCopyGroup] = useState<Set<string> | null>(null)
+    // IDs of ghost blocks (for duplication preview) - change label of block before ghost
     const [ghostBlockIds, setGhostBlockIds] = useState<Set<string>>(new Set());
+    // Ghost copies during drag-copy operation
     const [dragGhosts, setDragGhosts] = useState<BlockData[] | null>(null);
-
+    // Track if configs are loaded
     const [configsLoaded, setConfigsLoaded] = useState(false);
 
+    // Refs for mouse handling
     const canvasRef = useRef<SVGSVGElement>(null)
+    // Ref to track if selection box is being dragged
     const isSelectionDragging = useRef(false)
 
+    // Memoized array of selected block IDs for stable reference
     const selectedBlocksArray = useMemo(() => Array.from(selectedBlocks), [selectedBlocks]);
 
 
@@ -104,19 +115,7 @@ export default function Canvas() {
         loadConfigs()
     }, [])
 
-    // Show loading screen while configs load
-    // if (!configsLoaded) {
-    //     return (
-    //         <div style={{ 
-    //             padding: 40, 
-    //             textAlign: 'center',
-    //             fontFamily: 'monospace'
-    //         }}>
-    //             <h2>Loading Block Configurations...</h2>
-    //         </div>
-    //     )
-    // }
-
+    // Handle starting a group drag-copy operation
     const handleStartGroupDragCopy = useCallback((blockIds: string[], startPoint: { x: number, y: number }) => {
         // Create ghost copies at the start positions
         const ghosts = blockIds.map(blockId => {
@@ -689,3 +688,4 @@ export default function Canvas() {
         </>
     )
 }
+

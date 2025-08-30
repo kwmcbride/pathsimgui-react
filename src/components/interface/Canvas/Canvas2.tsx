@@ -99,6 +99,8 @@ type Action =
   | { type: 'GHOST_CLEAR' }
   | { type: 'DELETE_BLOCK'; id: string }
   | { type: 'DELETE_SELECTED' }
+  | { type: 'ADD_BLOCK'; block: Partial<BlockData> }
+  | { type: 'RENAME_BLOCK'; oldId: string; newId: string }
 
 /**
  * Snap a position to the grid for both coordinates and size.
@@ -322,61 +324,117 @@ function reducer(state: CanvasState, action: Action): CanvasState {
         contextMenu: { ...state.contextMenu, visible: false }
       }
 
-    // Duplicate a single block
-    case 'DUPLICATE_SINGLE': {
-      const original = state.blocks.find(b => b.id === action.originalId)
-      if (!original) return state
-      const newId = `${original.blockType}_${Date.now()}_${Math.random()
-        .toString(36)
-        .slice(2, 8)}`
+    // Add a new block with smart naming
+    case 'ADD_BLOCK': {
+      const incoming = action.block
+      if (!incoming.blockType) return state
+      
+      const base = displayBaseName(incoming.blockType)
+      const existingNames = state.blocks.map(b => b.id)
+      const newId = getNextAvailableName(base, existingNames)
+
       const newBlock: BlockData = {
-        ...original,
         id: newId,
-        position: {
-          ...original.position,
-          x: snapToGrid(original.position.x + action.dx, GRID_SIZE),
-          y: snapToGrid(original.position.y + action.dy, GRID_SIZE)
-        }
+        blockType: incoming.blockType,
+        position: incoming.position || { x: 50, y: 50, width: 100, height: 100 },
+        parameters: incoming.parameters || []
       }
+
       return {
         ...state,
-        blocks: [...state.blocks, newBlock],
-        selected: new Set([newId]),
-        ghostIds: new Set([newId])
+        blocks: [...state.blocks, newBlock]
       }
+    }
+
+    // Duplicate a single block
+    case 'DUPLICATE_SINGLE': {
+        const original = state.blocks.find(b => b.id === action.originalId)
+        if (!original) return state
+        
+        // Use the original block's ID as the base, not the blockType
+        const base = original.id
+        const existingNames = state.blocks.map(b => b.id)
+        const newId = getNextAvailableName(base, existingNames)
+        
+        const newBlock: BlockData = {
+            ...original,
+            id: newId,
+            position: {
+                ...original.position,
+                x: snapToGrid(original.position.x + action.dx, GRID_SIZE),
+                y: snapToGrid(original.position.y + action.dy, GRID_SIZE)
+            }
+        }
+        return {
+            ...state,
+            blocks: [...state.blocks, newBlock],
+            selected: new Set([newId]),
+            ghostIds: new Set([newId])
+        }
     }
 
     // Duplicate a group of selected blocks
     case 'DUPLICATE_GROUP': {
-      if (!state.selected.has(action.anchorId)) return state
-      const anchor = state.blocks.find(b => b.id === action.anchorId)
-      if (!anchor) return state
-      const newBlocks: BlockData[] = []
-      const newIds: string[] = []
-      state.selected.forEach(id => {
-        const orig = state.blocks.find(b => b.id === id)
-        if (!orig) return
-        const offsetX = orig.position.x - anchor.position.x
-        const offsetY = orig.position.y - anchor.position.y
-        const newId = `${orig.blockType}_${Date.now()}_${Math.random()
-          .toString(36)
-          .slice(2, 8)}`
-        newIds.push(newId)
-        newBlocks.push({
-          ...orig,
-          id: newId,
-          position: {
-            ...orig.position,
-            x: snapToGrid(anchor.position.x + action.dx + offsetX, GRID_SIZE),
-            y: snapToGrid(anchor.position.y + action.dy + offsetY, GRID_SIZE)
-          }
+        if (!state.selected.has(action.anchorId)) return state
+        const anchor = state.blocks.find(b => b.id === action.anchorId)
+        if (!anchor) return state
+        
+        const newBlocks: BlockData[] = []
+        const newIds: string[] = []
+        
+        // Get current existing names before we start adding
+        let existingNames = state.blocks.map(b => b.id)
+        
+        state.selected.forEach(id => {
+            const orig = state.blocks.find(b => b.id === id)
+            if (!orig) return
+            
+            // Use the original block's current ID as the base, not blockType
+            const base = orig.id
+            const newId = getNextAvailableName(base, existingNames)
+            
+            // Add this new ID to existingNames for next iteration
+            existingNames.push(newId)
+            newIds.push(newId)
+            
+            const offsetX = orig.position.x - anchor.position.x
+            const offsetY = orig.position.y - anchor.position.y
+            
+            newBlocks.push({
+                ...orig,
+                id: newId,
+                position: {
+                    ...orig.position,
+                    x: snapToGrid(anchor.position.x + action.dx + offsetX, GRID_SIZE),
+                    y: snapToGrid(anchor.position.y + action.dy + offsetY, GRID_SIZE)
+                }
+            })
         })
-      })
+        
+        return {
+            ...state,
+            blocks: [...state.blocks, ...newBlocks],
+            selected: new Set(newIds),
+            ghostIds: new Set(newIds)
+        }
+    }
+
+    // Rename a block
+    case 'RENAME_BLOCK': {
+      const updatedBlocks = state.blocks.map(b => 
+        b.id === action.oldId ? { ...b, id: action.newId } : b
+      )
+      
+      const updatedSelected = new Set(
+        Array.from(state.selected).map(id => 
+          id === action.oldId ? action.newId : id
+        )
+      )
+      
       return {
         ...state,
-        blocks: [...state.blocks, ...newBlocks],
-        selected: new Set(newIds),
-        ghostIds: new Set(newIds)
+        blocks: updatedBlocks,
+        selected: updatedSelected
       }
     }
 
@@ -631,7 +689,6 @@ export default function Canvas() {
    */
   const duplicateBlock = useCallback(
     (id: string) => {
-      // simple single duplicate offset by 50/50
       dispatch({
         type: 'DUPLICATE_SINGLE',
         originalId: id,
@@ -664,6 +721,14 @@ export default function Canvas() {
   /** Close context menu */
   const closeContextMenu = useCallback(
     () => dispatch({ type: 'CONTEXT_MENU_HIDE' }),
+    []
+  )
+
+  /** Rename a block */
+  const handleBlockRename = useCallback(
+    (oldId: string, newId: string) => {
+      dispatch({ type: 'RENAME_BLOCK', oldId, newId })
+    },
     []
   )
 
@@ -793,6 +858,8 @@ export default function Canvas() {
             onSelect={handleBlockSelect}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
+            allBlocks={state.blocks} // Add this line
+            onRename={handleBlockRename} // Add this line
           />
         ))}
 
@@ -830,4 +897,39 @@ export default function Canvas() {
       )}
     </>
   )
+}
+
+function escapeRegExp(s: string) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function displayBaseName(blockType: string) {
+    if (!blockType) return 'Block';
+    return blockType.charAt(0).toUpperCase() + blockType.slice(1);
+}
+
+/**
+ * Get the next available name for a base, reusing freed indices.
+ * If the base already has a number, extract the base part for consistent numbering
+ */
+function getNextAvailableName(base: string, existingNames: string[]) {
+    // Extract the actual base name if it already has a number
+    // e.g. "value" stays "value", "value1" becomes "value", "Gain2" becomes "Gain"
+    const match = base.match(/^(.+?)(\d+)?$/);
+    const actualBase = match ? match[1] : base;
+    
+    const used = new Set<number>();
+    const baseEsc = escapeRegExp(actualBase);
+    const re = new RegExp(`^${baseEsc}(\\d+)?$`);
+    
+    for (const n of existingNames) {
+        const m = String(n).match(re);
+        if (!m) continue;
+        if (!m[1]) used.add(0);
+        else used.add(parseInt(m[1], 10));
+    }
+    
+    for (let i = 0; ; i++) {
+        if (!used.has(i)) return i === 0 ? actualBase : `${actualBase}${i}`;
+    }
 }

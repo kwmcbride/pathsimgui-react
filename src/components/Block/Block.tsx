@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, memo, useMemo } from 'react'
 import Port from '../Port/Port'
 import Mask from '../Mask/Mask'
+import EditableLabel from '../interface/EditableLabel'
 import blockConfigManager from '../../lib/BlockConfigManager'
 import { snapToGrid, GRID_SIZE } from '../../utilities/grid'
 import generalConfig from '../../config/generalConfig'
@@ -37,7 +38,7 @@ interface BlockProps {
     selected?: boolean
     ghost?: boolean
     selectedBlocks?: string[]
-    allBlocks?: any[]
+    allBlocks?: {id: string}[]
     onParameterChange?: (blockId: string, parameters: BlockParameter[]) => void
     onPositionChange?: (blockId: string, position: Position) => void
     onGroupMove?: (deltas: Record<string, { deltaX: number, deltaY: number }>) => void // Add this
@@ -45,6 +46,7 @@ interface BlockProps {
     onSelect?: (blockId: string, isSelected: boolean, multiSelect?: boolean) => void
     onDragStart?: () => void
     onDragEnd?: () => void
+    onRename?: (oldId: string, newId: string) => void
 }
 
 /**
@@ -81,7 +83,8 @@ function Block({
     onContextMenu,
     onSelect,
     onDragStart,
-    onDragEnd
+    onDragEnd,
+    onRename
 }: BlockProps) {
     // State hooks, these need to be at the top
 
@@ -129,6 +132,9 @@ function Block({
     const [showParameterDialog, setShowParameterDialog] = useState(false)
     const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
+    const [isEditingLabel, setIsEditingLabel] = useState(false)
+    const [editingLabelText, setEditingLabelText] = useState(id)
+
     // Parameters for the block (editable by user)
     const [blockParameters, setBlockParameters] = useState<BlockParameter[]>(
         parameters.length > 0 ? parameters : [
@@ -153,6 +159,8 @@ function Block({
     const isResizingRef = useRef(false)  // Add this line
 
     const initialPositionRef = useRef({ x: 0, y: 0 })
+
+    const labelInputRef = useRef<HTMLInputElement>(null)
     
     // Also update your position sync effect to be less restrictive:
     useEffect(() => {
@@ -694,6 +702,116 @@ function Block({
         // Context menu is handled in the right-click mousedown event
     }, [])
 
+
+    // Replace the existing label constants and handlers with these updated versions:
+
+    const LABEL_INPUT_MIN_WIDTH = 40
+    const LABEL_INPUT_MAX_WIDTH = 150
+    const LABEL_INPUT_PADDING = 16
+    const LABEL_FONT_SIZE = 12
+    const LABEL_MAX_LINES = 3 // Maximum number of lines before scrolling
+
+    const handleLabelDoubleClick = useCallback((e: React.MouseEvent) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsEditingLabel(true)
+        setEditingLabelText(id)
+        
+        // Focus the input after it renders
+        setTimeout(() => {
+            labelInputRef.current?.focus()
+            labelInputRef.current?.select()
+        }, 10)
+    }, [id])
+
+    const calculateInputDimensions = useCallback((text: string) => {
+        const canvas = document.createElement('canvas')
+        const context = canvas.getContext('2d')
+        if (!context) return { width: LABEL_INPUT_MIN_WIDTH, height: 20 }
+        
+        context.font = `${LABEL_FONT_SIZE}px Arial`
+        const textWidth = context.measureText(text).width
+        
+        // Calculate how many lines we need
+        const maxCharsPerLine = Math.floor(LABEL_INPUT_MAX_WIDTH / (LABEL_FONT_SIZE * 0.6))
+        const lines = Math.ceil(text.length / maxCharsPerLine)
+        const actualLines = Math.min(lines, LABEL_MAX_LINES)
+        
+        // Calculate width
+        let width
+        if (textWidth + LABEL_INPUT_PADDING <= LABEL_INPUT_MAX_WIDTH) {
+            // Text fits on one line
+            width = Math.max(LABEL_INPUT_MIN_WIDTH, textWidth + LABEL_INPUT_PADDING)
+        } else {
+            // Text needs multiple lines, use max width
+            width = LABEL_INPUT_MAX_WIDTH
+        }
+        
+        // Calculate height based on number of lines
+        const lineHeight = LABEL_FONT_SIZE + 4 // Add some line spacing
+        const height = Math.max(20, actualLines * lineHeight + 4) // +4 for padding
+        
+        return { width, height }
+    }, [])
+
+    const handleLabelSave = useCallback(() => {
+        const newName = editingLabelText.trim()
+        
+        // Allow saving the same name (no validation error)
+        if (newName === id) {
+            setIsEditingLabel(false)
+            return
+        }
+        
+        if (newName && onRename) {
+            // Simple validation
+            if (/^[a-zA-Z0-9_-\s]+$/.test(newName)) { // Allow spaces
+                const existingNames = allBlocks?.map(b => b.id) || []
+                if (!existingNames.includes(newName)) {
+                    onRename(id, newName)
+                    setIsEditingLabel(false)
+                    return
+                }
+            }
+        }
+        
+        // If validation fails or no change, just close
+        setIsEditingLabel(false)
+    }, [editingLabelText, id, onRename, allBlocks])
+
+    const handleLabelCancel = useCallback(() => {
+        setIsEditingLabel(false)
+        setEditingLabelText(id)
+    }, [id])
+
+    const handleLabelKeyDown = useCallback((e: React.KeyboardEvent) => {
+        // Prevent event bubbling to avoid browser navigation
+        e.stopPropagation()
+        
+        if (e.key === 'Enter') {
+            e.preventDefault() // Prevent form submission/page refresh
+            handleLabelSave()
+        } else if (e.key === 'Escape') {
+            e.preventDefault()
+            handleLabelCancel()
+        }
+        // Allow other keys (typing, backspace, etc.) to work normally
+    }, [handleLabelSave, handleLabelCancel])
+
+    const handleLabelChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        setEditingLabelText(e.target.value)
+    }, [])
+
+    const handleLabelBlur = useCallback(() => {
+        // Small delay to allow other events to process first
+        setTimeout(() => {
+            if (isEditingLabel) {
+                handleLabelSave()
+            }
+        }, 100)
+    }, [isEditingLabel, handleLabelSave])
+    
+
     // NOW WE CAN DO EARLY RETURNS AFTER ALL HOOKS ARE DECLARED
     
     // Main Render
@@ -762,7 +880,7 @@ function Block({
                 })}
 
                 {/* Block label */}
-                <text
+                {/* <text
                     x={position.width / 2}
                     y={position.height + 20}
                     textAnchor="middle"
@@ -772,7 +890,145 @@ function Block({
                     style={{ userSelect: 'none', pointerEvents: 'none' }}
                 >
                     {id}
-                </text>
+                </text> */}
+
+                {/* <EditableLabel
+                    label={id}
+                    x={position.width / 2}
+                    y={position.height + 20}
+                    fontSize={parseInt(config.labelFontSize) || 12}
+                    fontFamily={config.labelFontFamily || 'Arial'}
+                    fontColor={config.labelFontColor || '#000'}
+                    existingNames={allBlocks?.map(b => b.id).filter(blockId => blockId !== id) || []}
+                    onLabelChange={(newLabel) => {
+                        console.log('Renaming block from', id, 'to', newLabel) // Debug log
+                        onRename?.(id, newLabel)
+                    }}
+                /> */}
+{/* 
+                {isEditingLabel ? (
+                    <foreignObject
+                        x={position.width / 2 - calculateInputDimensions(editingLabelText).width / 2}
+                        y={position.height + 20 - LABEL_FONT_SIZE / 2} // Match the text y position
+                        width={calculateInputDimensions(editingLabelText).width + 10}
+                        height={calculateInputDimensions(editingLabelText).height + 10}
+                    >
+                        <input
+                            ref={labelInputRef}
+                            type="text"
+                            value={editingLabelText}
+                            onChange={(e) => setEditingLabelText(e.target.value)}
+                            onKeyDown={handleLabelKeyDown}
+                            onBlur={handleLabelBlur}
+                            autoFocus
+                            style={{
+                                width: `${calculateInputDimensions(editingLabelText).width}px`,
+                                height: '20px',
+                                fontSize: `${LABEL_FONT_SIZE}px`,
+                                fontFamily: 'Arial',
+                                textAlign: 'center',
+                                border: '1px solid #333',
+                                borderRadius: '2px',
+                                padding: '2px 4px',
+                                outline: 'none',
+                                backgroundColor: 'white',
+                                color: '#000',
+                                boxSizing: 'border-box'
+                            }}
+                        />
+                    </foreignObject>
+                ) : (
+                    <text
+                        x={position.width / 2}
+                        y={position.height + 20}
+                        textAnchor="middle"
+                        fontSize={config.labelFontSize}
+                        fontFamily={config.labelFontFamily}
+                        fill={config.labelFontColor}
+                        style={{ 
+                            userSelect: 'none', 
+                            cursor: 'pointer',
+                            pointerEvents: 'auto'
+                        }}
+                        onDoubleClick={handleLabelDoubleClick}
+                    >
+                        {id}
+                    </text>
+                )} */}
+
+
+                {isEditingLabel ? (
+    <foreignObject
+        x={position.width / 2 - 50}
+        y={position.height + 5}
+        width={100}
+        height={30}
+    >
+        <input
+            ref={labelInputRef}
+            type="text"
+            value={editingLabelText}
+            onChange={(e) => setEditingLabelText(e.target.value)}
+            onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') {
+                    e.preventDefault()
+                    const newName = editingLabelText.trim()
+                    if (newName && newName !== id && onRename) {
+                        onRename(id, newName)
+                    }
+                    setIsEditingLabel(false)
+                } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setEditingLabelText(id)
+                    setIsEditingLabel(false)
+                }
+            }}
+            onBlur={() => {
+                const newName = editingLabelText.trim()
+                if (newName && newName !== id && onRename) {
+                    onRename(id, newName)
+                }
+                setIsEditingLabel(false)
+            }}
+            autoFocus
+            style={{
+                width: '100px',
+                height: '20px',
+                fontSize: '12px',
+                textAlign: 'center',
+                border: '1px solid #333',
+                borderRadius: '2px',
+                padding: '2px',
+                outline: 'none',
+                backgroundColor: 'white',
+                color: '#000'
+            }}
+        />
+    </foreignObject>
+) : (
+    <text
+        x={position.width / 2}
+        y={position.height + 20}
+        textAnchor="middle"
+        fontSize={config.labelFontSize}
+        fontFamily={config.labelFontFamily}
+        fill={config.labelFontColor}
+        style={{ 
+            userSelect: 'none', 
+            cursor: 'pointer',
+            pointerEvents: 'auto'
+        }}
+        onDoubleClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setIsEditingLabel(true)
+            setEditingLabelText(id)
+        }}
+    >
+        {id}
+    </text>
+)}
 
                 {/* Resize handles */}
                 {showResizeHandles && !isDragging && !isResizing && (
