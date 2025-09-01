@@ -7,7 +7,7 @@ interface PortProps {
     x: number
     y: number
     size?: number
-    onPortMouseDown?: (e: React.MouseEvent, blockId: string, portType: 'input' | 'output', portIndex: number) => void
+    onPortMouseDown?: (e: React.MouseEvent, blockId: string, portType: 'input' | 'output', portIndex: number, absolutePos: {x: number, y: number}) => void
 }
 
 /**
@@ -24,8 +24,23 @@ export default function Port({
 }: PortProps) {
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
         e.stopPropagation()
-        onPortMouseDown?.(e, blockId, portType, portIndex)
-    }, [blockId, portType, portIndex, onPortMouseDown])
+        
+        // Calculate absolute position of this port in SVG coordinates
+        const blockElement = document.getElementById(`${blockId}-group`)
+        if (blockElement) {
+            const transform = blockElement.getAttribute('transform') || ''
+            const matches = transform.match(/translate\(([^,]+),\s*([^)]+)\)/)
+            if (matches) {
+                const blockX = parseFloat(matches[1])
+                const blockY = parseFloat(matches[2])
+                const absolutePos = {
+                    x: blockX + x,
+                    y: blockY + y
+                }
+                onPortMouseDown?.(e, blockId, portType, portIndex, absolutePos)
+            }
+        }
+    }, [blockId, portType, portIndex, x, y, onPortMouseDown])
 
     const portStyle = {
         fill: portType === 'input' ? 'lightblue' : 'lightcoral',
@@ -40,6 +55,9 @@ export default function Port({
             cy={y}
             r={size / 2}
             {...portStyle}
+             data-port-type={portType}
+            data-block-id={blockId}
+            data-port-index={portIndex}
             onMouseDown={handleMouseDown}
         />
     )

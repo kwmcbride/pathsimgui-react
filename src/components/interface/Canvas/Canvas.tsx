@@ -1,691 +1,1144 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+//// filepath: /Users/kevinmcbride/Documents/Development/pathSimGui/pathsimgui-react/src/components/interface/Canvas/Canvas.tsx
+import React, {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useMemo
+} from 'react'
 import Block from '../../Block/Block'
 import ContextMenu from '../ContextMenu/ContextMenu'
 import styles from './Canvas.module.css'
-import { throttle } from '../../../utilities/throttle'
 import { snapToGrid, GRID_SIZE } from '../../../utilities/grid'
-// import { BlockConfigManager } from '../../../lib/BlockConfigManager';
-// import blockConfigManager from '../../../lib/BlockConfigManager';   
-// import { testValue } from '../../../lib/test'
-// console.log('Test import:', testValue)
 import blockConfigManager from '../../../lib/BlockConfigManager'
+import Signal, { Point } from '../../Signal/Signal'
 
-// Add these type definitions
+/**
+ * BlockData describes a block's properties on the canvas.
+ * @typedef {Object} BlockData
+ * @property {string} id - Unique identifier for the block.
+ * @property {string} blockType - Type of block (e.g., 'gain', 'constant').
+ * @property {Object} position - Position and size of the block.
+ * @property {number} position.x - X coordinate.
+ * @property {number} position.y - Y Coordinate.
+ * @property {number} position.width - Width of the block.
+ * @property {number} position.height - Height of the block.
+ * @property {any[]} parameters - Parameters for the block.
+ */
 interface BlockData {
-    id: string
-    blockType: string
-    position: {
-        x: number
-        y: number
-        width: number
-        height: number
-    }
-    parameters: any[]
+  id: string
+  blockType: string
+  position: { x: number; y: number; width: number; height: number }
+  parameters: any[]
 }
 
-interface ContextMenuState {
-    visible: boolean
-    x: number
-    y: number
-    blockId: string | null
-}
-
+/**
+ * Position describes the coordinates and size of a block.
+ */
 interface Position {
-    x: number
-    y: number
-    width: number
-    height: number
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
-export default function Canvas() {
+/**
+ * SelectionBox describes the selection rectangle drawn by the user.
+ */
+interface SelectionBox {
+  isActive: boolean
+  startX: number
+  startY: number
+  currentX: number
+  currentY: number
+}
 
-    // State for blocks on the canvas
-    const [blocks, setBlocks] = useState<BlockData[]>([
-        // Add some test blocks to start with
-        {
-            id: 'block1',
-            blockType: 'gain',
-            position: { x: 100, y: 100, width: 120, height: 80 },
-            parameters: []
+/**
+ * ContextMenuState describes the state of the context menu.
+ */
+interface ContextMenuState {
+  visible: boolean
+  x: number
+  y: number
+  blockId: string | null
+}
+
+/**
+ * SignalData describes a signal connection between two ports.
+ */
+interface SignalData {
+    id: string
+    fromBlockId: string
+    fromPortIndex: number
+    toBlockId?: string
+    toPortIndex?: number
+    from: Point
+    to: Point
+    selected?: boolean
+}
+
+/**
+ * CanvasState describes the entire state of the canvas.
+ */
+interface CanvasState {
+  blocks: BlockData[]
+  selected: Set<string>
+  selectionBox: SelectionBox
+  contextMenu: ContextMenuState
+  isDragging: boolean
+  ghostIds: Set<string>
+  dragGhosts: BlockData[] | null
+  configsLoaded: boolean
+  signals: SignalData[]
+  isCreatingSignal: boolean
+  previewSignal?: {
+      from: Point
+      to: Point
+  }
+}
+
+/**
+ * Action describes all possible actions for the canvas reducer.
+ */
+type Action =
+  | { type: 'CONFIGS_LOADED' }
+  | { type: 'BLOCK_POSITION_CHANGE'; id: string; pos: Position; groupDrag: boolean }
+  | { type: 'BLOCK_PARAMETERS_UPDATE'; id: string; parameters: any[] }
+  | { type: 'SELECT_TOGGLE'; id: string }
+  | { type: 'SELECT_SET'; ids: string[] }
+  | { type: 'SELECT_CLEAR' }
+  | { type: 'DRAG_START' }
+  | { type: 'DRAG_END' }
+  | { type: 'SELECTION_BOX_START'; x: number; y: number }
+  | { type: 'SELECTION_BOX_UPDATE'; x: number; y: number }
+  | { type: 'SELECTION_BOX_END' }
+  | { type: 'CONTEXT_MENU_SHOW'; x: number; y: number; blockId: string | null }
+  | { type: 'CONTEXT_MENU_HIDE' }
+  | { type: 'DUPLICATE_SINGLE'; originalId: string; dx: number; dy: number }
+  | { type: 'DUPLICATE_GROUP'; anchorId: string; dx: number; dy: number }
+  | { type: 'GHOST_SET'; ids: string[] }
+  | { type: 'GHOST_CLEAR' }
+  | { type: 'DELETE_BLOCK'; id: string }
+  | { type: 'DELETE_SELECTED' }
+  | { type: 'ADD_BLOCK'; block: Partial<BlockData> }
+  | { type: 'RENAME_BLOCK'; oldId: string; newId: string }
+  | { type: 'SIGNAL_START_CREATION', from: Point, blockId: string, portIndex: number }
+  | { type: 'SIGNAL_UPDATE_PREVIEW', to: Point }
+  | { type: 'SIGNAL_COMPLETE_CREATION', toBlockId: string, toPortIndex: number }
+  | { type: 'SIGNAL_CANCEL_CREATION' }
+  | { type: 'SIGNAL_SELECT', signalId: string }
+  | { type: 'SIGNAL_DELETE', signalId: string }
+
+/**
+ * Snap a position to the grid for both coordinates and size.
+ * @param {Position} p
+ * @returns {Position}
+ */
+function snapRect(p: Position): Position {
+  return {
+    x: snapToGrid(p.x, GRID_SIZE),
+    y: snapToGrid(p.y, GRID_SIZE),
+    width: snapToGrid(p.width, GRID_SIZE),
+    height: snapToGrid(p.height, GRID_SIZE)
+  }
+}
+
+/**
+ * Snap only the x and y coordinates to the grid.
+ * @param {Position} p
+ * @returns {Position}
+ */
+function snapXY(p: Position): Position {
+  return {
+    x: snapToGrid(p.x, GRID_SIZE),
+    y: snapToGrid(p.y, GRID_SIZE),
+    width: p.width,
+    height: p.height
+  }
+}
+
+/**
+ * Initial state for the canvas reducer.
+ */
+const initialState: CanvasState = {
+  blocks: [
+    {
+      id: 'block1',
+      blockType: 'gain',
+      position: { x: 100, y: 100, width: 120, height: 80 },
+      parameters: []
+    },
+    {
+      id: 'block2',
+      blockType: 'constant',
+      position: { x: 300, y: 200, width: 50, height: 50 },
+      parameters: []
+    }
+  ],
+  selected: new Set(),
+  selectionBox: {
+    isActive: false,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0
+  },
+  contextMenu: { visible: false, x: 0, y: 0, blockId: null },
+  isDragging: false,
+  ghostIds: new Set(),
+  dragGhosts: null,
+  configsLoaded: false,
+  // Add these missing signal properties:
+  signals: [],
+  isCreatingSignal: false,
+  previewSignal: undefined
+}
+
+/**
+ * Reducer for managing canvas state.
+ * Handles block movement, selection, duplication, deletion, and context menu.
+ * @param {CanvasState} state
+ * @param {Action} action
+ * @returns {CanvasState}
+ */
+function reducer(state: CanvasState, action: Action): CanvasState {
+
+  switch (action.type) {
+
+    // Mark configs as loaded
+    case 'CONFIGS_LOADED':
+      return { ...state, configsLoaded: true }
+
+    // Toggle selection for a block
+    case 'SELECT_TOGGLE': {
+      const next = new Set(state.selected)
+      next.has(action.id) ? next.delete(action.id) : next.add(action.id)
+      return { ...state, selected: next }
+    }
+    // Set selection to a specific set of block ids
+    case 'SELECT_SET':
+      return { ...state, selected: new Set(action.ids) }
+    // Clear all selections
+    case 'SELECT_CLEAR':
+      return { ...state, selected: new Set() }
+
+    // Start dragging blocks
+    case 'DRAG_START':
+      return { ...state, isDragging: true }
+    // End dragging blocks and clear ghost ids
+    case 'DRAG_END':
+      return { ...state, isDragging: false, ghostIds: new Set() }
+
+    // Start drawing selection box
+    case 'SELECTION_BOX_START':
+      return {
+        ...state,
+        selectionBox: {
+          isActive: true,
+          startX: action.x,
+          startY: action.y,
+          currentX: action.x,
+          currentY: action.y
         },
-        {
-            id: 'block2', 
-            blockType: 'constant',
-            position: { x: 300, y: 200, width: 50, height: 50 },
-            parameters: []
+        selected: new Set()
+      }
+    // Update selection box dimensions and update selection
+    case 'SELECTION_BOX_UPDATE': {
+      if (!state.selectionBox.isActive) return state
+      const { startX, startY } = state.selectionBox
+      const minX = Math.min(startX, action.x)
+      const maxX = Math.max(startX, action.x)
+      const minY = Math.min(startY, action.y)
+      const maxY = Math.max(startY, action.y)
+      const inside = state.blocks.filter(b => {
+        const { x, y, width, height } = b.position
+        return x < maxX && x + width > minX && y < maxY && y + height > minY
+      }).map(b => b.id)
+      return {
+        ...state,
+        selectionBox: { ...state.selectionBox, currentX: action.x, currentY: action.y },
+        selected: new Set(inside)
+      }
+    }
+    // End selection box drawing
+    case 'SELECTION_BOX_END':
+      return {
+        ...state,
+        selectionBox: { ...state.selectionBox, isActive: false }
+      }
+
+    // Change block position or resize, including group drag
+    case 'BLOCK_POSITION_CHANGE': {
+
+      const { id, pos, groupDrag } = action
+      const current = state.blocks.find(b => b.id === id)
+      if (!current) return state
+
+      const isResize =
+        pos.width !== current.position.width ||
+        pos.height !== current.position.height
+
+      let updatedBlocks: BlockData[]
+
+      if (isResize) {
+        // Only target block
+        const snapped = snapRect(pos)
+        if (
+          current.position.x === snapped.x &&
+          current.position.y === snapped.y &&
+          current.position.width === snapped.width &&
+          current.position.height === snapped.height
+        ) return state
+        updatedBlocks = state.blocks.map(b =>
+          b.id === id ? { ...b, position: snapped } : b
+        )
+        return { ...state, blocks: updatedBlocks }
+      }
+
+      // Drag
+      if (groupDrag && state.selected.size > 1) {
+        const dx = pos.x - current.position.x
+        const dy = pos.y - current.position.y
+        if (dx === 0 && dy === 0) return state
+        updatedBlocks = state.blocks.map(b => {
+          if (b.id === id) {
+            return { ...b, position: snapXY(pos) }
+          }
+          if (state.selected.has(b.id)) {
+            return {
+              ...b,
+              position: {
+                ...b.position,
+                x: snapToGrid(b.position.x + dx, GRID_SIZE),
+                y: snapToGrid(b.position.y + dy, GRID_SIZE)
+              }
+            }
+          }
+          return b
+        })
+        return { ...state, blocks: updatedBlocks }
+      } else {
+        const snapped = snapXY(pos)
+        const c = current.position
+        if (c.x === snapped.x && c.y === snapped.y) return state
+        updatedBlocks = state.blocks.map(b =>
+          b.id === id ? { ...b, position: snapped } : b
+        )
+        return { ...state, blocks: updatedBlocks }
+      }
+    }
+
+    // Update block parameters
+    case 'BLOCK_PARAMETERS_UPDATE':
+      return {
+        ...state,
+        blocks: state.blocks.map(b =>
+          b.id === action.id ? { ...b, parameters: action.parameters } : b
+        )
+      }
+
+    // Show context menu at a position for a block
+    case 'CONTEXT_MENU_SHOW':
+      return {
+        ...state,
+        contextMenu: {
+          visible: true,
+          x: action.x,
+          y: action.y,
+          blockId: action.blockId
         }
-    ])
-    
-    // Selection state
-    const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set())
-    // Context menu state
-    const [contextMenu, setContextMenu] = useState<ContextMenuState>({
-        visible: false,
-        x: 0,
-        y: 0,
-        blockId: null
-    })
-    
-    // Selection box state
-    const [selectionBox, setSelectionBox] = useState<{
-        isActive: boolean
-        startX: number
-        startY: number
-        currentX: number
-        currentY: number
-    }>({
-        isActive: false,
-        startX: 0,
-        startY: 0,
-        currentX: 0,
-        currentY: 0
-    })
+      }
+    // Hide context menu
+    case 'CONTEXT_MENU_HIDE':
+      return {
+        ...state,
+        contextMenu: { ...state.contextMenu, visible: false }
+      }
 
-    // Dragging state
-    const [isAnyBlockDragging, setIsAnyBlockDragging] = useState(false)
-    // Group of blocks being copied
-    const [dragCopyGroup, setDragCopyGroup] = useState<Set<string> | null>(null)
-    // IDs of ghost blocks (for duplication preview) - change label of block before ghost
-    const [ghostBlockIds, setGhostBlockIds] = useState<Set<string>>(new Set());
-    // Ghost copies during drag-copy operation
-    const [dragGhosts, setDragGhosts] = useState<BlockData[] | null>(null);
-    // Track if configs are loaded
-    const [configsLoaded, setConfigsLoaded] = useState(false);
+    // Add a new block with smart naming
+    case 'ADD_BLOCK': {
+      const incoming = action.block
+      if (!incoming.blockType) return state
+      
+      const base = displayBaseName(incoming.blockType)
+      const existingNames = state.blocks.map(b => b.id)
+      const newId = getNextAvailableName(base, existingNames)
 
-    // Refs for mouse handling
-    const canvasRef = useRef<SVGSVGElement>(null)
-    // Ref to track if selection box is being dragged
-    const isSelectionDragging = useRef(false)
+      const newBlock: BlockData = {
+        id: newId,
+        blockType: incoming.blockType,
+        position: incoming.position || { x: 50, y: 50, width: 100, height: 100 },
+        parameters: incoming.parameters || []
+      }
 
-    // Memoized array of selected block IDs for stable reference
-    const selectedBlocksArray = useMemo(() => Array.from(selectedBlocks), [selectedBlocks]);
+      return {
+        ...state,
+        blocks: [...state.blocks, newBlock]
+      }
+    }
 
-
-    // Load configs on startup
-    useEffect(() => {
-        async function loadConfigs() {
-            try {
-                await blockConfigManager.initialize()
-                setConfigsLoaded(true)
-            } catch (error) {
-                console.error('Failed to load block configurations:', error)
-                setConfigsLoaded(true) // Still render with fallback configs
+    // Duplicate a single block
+    case 'DUPLICATE_SINGLE': {
+        const original = state.blocks.find(b => b.id === action.originalId)
+        if (!original) return state
+        
+        // Use the original block's ID as the base, not the blockType
+        const base = original.id
+        const existingNames = state.blocks.map(b => b.id)
+        const newId = getNextAvailableName(base, existingNames)
+        
+        const newBlock: BlockData = {
+            ...original,
+            id: newId,
+            position: {
+                ...original.position,
+                x: snapToGrid(original.position.x + action.dx, GRID_SIZE),
+                y: snapToGrid(original.position.y + action.dy, GRID_SIZE)
             }
         }
-        loadConfigs()
-    }, [])
+        return {
+            ...state,
+            blocks: [...state.blocks, newBlock],
+            selected: new Set([newId]),
+            ghostIds: new Set([newId])
+        }
+    }
 
-    // Handle starting a group drag-copy operation
-    const handleStartGroupDragCopy = useCallback((blockIds: string[], startPoint: { x: number, y: number }) => {
-        // Create ghost copies at the start positions
-        const ghosts = blockIds.map(blockId => {
-            const block = blocks.find(b => b.id === blockId);
-            return block ? { ...block, id: `ghost_${block.id}` } : null;
-        }).filter(Boolean) as BlockData[];
-        setDragGhosts(ghosts);
-    }, [blocks]);
-
-      
-    /**
-     * Convert screen coordinates to SVG coordinates
-     */
-    const getSVGMousePosition = useCallback((e: MouseEvent | React.MouseEvent) => {
-        if (!canvasRef.current) return { x: 0, y: 0 }
+    // Duplicate a group of selected blocks
+    case 'DUPLICATE_GROUP': {
+        if (!state.selected.has(action.anchorId)) return state
+        const anchor = state.blocks.find(b => b.id === action.anchorId)
+        if (!anchor) return state
         
-        const svg = canvasRef.current
-        const rect = svg.getBoundingClientRect()
-        const viewBox = svg.viewBox.baseVal
+        const newBlocks: BlockData[] = []
+        const newIds: string[] = []
         
-        const scaleX = viewBox.width / rect.width
-        const scaleY = viewBox.height / rect.height
+        // Get current existing names before we start adding
+        let existingNames = state.blocks.map(b => b.id)
+        
+        state.selected.forEach(id => {
+            const orig = state.blocks.find(b => b.id === id)
+            if (!orig) return
+            
+            // Use the original block's current ID as the base, not blockType
+            const base = orig.id
+            const newId = getNextAvailableName(base, existingNames)
+            
+            // Add this new ID to existingNames for next iteration
+            existingNames.push(newId)
+            newIds.push(newId)
+            
+            const offsetX = orig.position.x - anchor.position.x
+            const offsetY = orig.position.y - anchor.position.y
+            
+            newBlocks.push({
+                ...orig,
+                id: newId,
+                position: {
+                    ...orig.position,
+                    x: snapToGrid(anchor.position.x + action.dx + offsetX, GRID_SIZE),
+                    y: snapToGrid(anchor.position.y + action.dy + offsetY, GRID_SIZE)
+                }
+            })
+        })
         
         return {
-            x: (e.clientX - rect.left) * scaleX + viewBox.x,
-            y: (e.clientY - rect.top) * scaleY + viewBox.y
+            ...state,
+            blocks: [...state.blocks, ...newBlocks],
+            selected: new Set(newIds),
+            ghostIds: new Set(newIds)
         }
-    }, [])
+    }
 
-    /**
-     * Handle canvas mouse down for selection box
-     */
-    const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
-        if (e.button !== 0) return // Only left click
-        
-        const target = e.target as SVGElement
-        // Check if we clicked on canvas background (not a block)
-        if (target.tagName === 'rect' && target.getAttribute('fill') === '#d1d1d1ff') {
-            e.preventDefault()
-            
-            // Clear existing selections
-            setSelectedBlocks(new Set())
-            
-            // Start selection box
-            const svgPoint = getSVGMousePosition(e)
-            const startPoint = { x: svgPoint.x, y: svgPoint.y } // Store start point
-            
-            setSelectionBox({
-                isActive: true,
-                startX: svgPoint.x,
-                startY: svgPoint.y,
-                currentX: svgPoint.x,
-                currentY: svgPoint.y
-            })
-            isSelectionDragging.current = true
-            
-            const handleMouseMove = (e: MouseEvent) => {
-                if (!isSelectionDragging.current) return
-                
-                const currentPoint = getSVGMousePosition(e)
-                setSelectionBox(prev => ({
-                    ...prev,
-                    currentX: currentPoint.x,
-                    currentY: currentPoint.y
-                }))
-                
-                // Calculate selection area using the stored start point
-                const minX = Math.min(startPoint.x, currentPoint.x)
-                const maxX = Math.max(startPoint.x, currentPoint.x)
-                const minY = Math.min(startPoint.y, currentPoint.y)
-                const maxY = Math.max(startPoint.y, currentPoint.y)
-                
-                // Find blocks within selection area
-                const selectedBlockIds = new Set<string>()
-                blocks.forEach(block => {
-                    const blockLeft = block.position.x
-                    const blockRight = block.position.x + block.position.width
-                    const blockTop = block.position.y
-                    const blockBottom = block.position.y + block.position.height
-                    
-                    // Check if block overlaps with selection area
-                    if (blockLeft < maxX && blockRight > minX && 
-                        blockTop < maxY && blockBottom > minY) {
-                        selectedBlockIds.add(block.id)
-                    }
-                })
-                
-                setSelectedBlocks(selectedBlockIds)
-            }
-            
-            const handleMouseUp = () => {
-                isSelectionDragging.current = false
-                setSelectionBox(prev => ({ ...prev, isActive: false }))
-                document.removeEventListener('mousemove', handleMouseMove)
-                document.removeEventListener('mouseup', handleMouseUp)
-            }
-            
-            document.addEventListener('mousemove', handleMouseMove)
-            document.addEventListener('mouseup', handleMouseUp)
-        }
-    }, [getSVGMousePosition, blocks])
-
-    useEffect(() => {
-        const handleMouseUp = () => {
-            setGhostBlockIds(new Set());
-        };
-        document.addEventListener('mouseup', handleMouseUp);
-        return () => document.removeEventListener('mouseup', handleMouseUp);
-    }, []);
-
-    /**
-     * Handle block selection
-     */
-    const handleBlockSelect = useCallback((blockId: string, isSelected: boolean, multiSelect: boolean = false) => {
-        setSelectedBlocks(prev => {
-            const newSelected = new Set(prev)
-            
-            if (multiSelect) {
-                // Add/remove from selection
-                if (isSelected) {
-                    newSelected.add(blockId)
-                } else {
-                    newSelected.delete(blockId)
-                }
-            } else {
-                // Single selection
-                newSelected.clear()
-                if (isSelected) {
-                    newSelected.add(blockId)
-                }
-            }
-            
-            return newSelected
-        })
-    }, [])
-
-    // Add ref to track current selection
-    const selectedBlocksRef = useRef<Set<string>>(new Set())
-
-    const handleDragStart = useCallback(() => {
-        setIsAnyBlockDragging(true)
-    }, [])
-
-    const handleDragEnd = useCallback(() => {
-        setIsAnyBlockDragging(false)
-        setGhostBlockIds(new Set()) // Clear all ghost blocks when drag ends
-    }, [])
-
-    
-    // Update the ref whenever selectedBlocks changes
-    useEffect(() => {
-        selectedBlocksRef.current = selectedBlocks
-    }, [selectedBlocks])
-
-    /**
-     * Handle block position changes (dragging/resizing)
-     */
-    const handleBlockPositionChange = useCallback((blockId: string, newPosition: Position) => {
-        setBlocks(prev => {
-            const block = prev.find(b => b.id === blockId)
-            if (!block) return prev
-
-            const isResize =
-                newPosition.width !== block.position.width ||
-                newPosition.height !== block.position.height
-
-            // If this is a resize, ONLY update the resized block.
-            // (Previous logic treated any x/y change as a drag and propagated delta to the group.)
-            if (isResize) {
-                // No actual change
-                if (
-                    block.position.x === newPosition.x &&
-                    block.position.y === newPosition.y &&
-                    block.position.width === newPosition.width &&
-                    block.position.height === newPosition.height
-                ) return prev
-
-                return prev.map(b =>
-                    b.id === blockId
-                        ? {
-                            ...b,
-                            position: {
-                                x: snapToGrid(newPosition.x, GRID_SIZE),
-                                y: snapToGrid(newPosition.y, GRID_SIZE),
-                                width: snapToGrid(newPosition.width, GRID_SIZE),
-                                height: snapToGrid(newPosition.height, GRID_SIZE)
-                            }
-                        }
-                        : b
-                )
-            }
-
-            // Drag logic (no size change)
-            const deltaX = newPosition.x - block.position.x
-            const deltaY = newPosition.y - block.position.y
-            if (Math.abs(deltaX) < 0.1 && Math.abs(deltaY) < 0.1) return prev
-
-            return prev.map(b => {
-                if (b.id === blockId) {
-                    return {
-                        ...b,
-                        position: {
-                            ...b.position,
-                            x: snapToGrid(newPosition.x, GRID_SIZE),
-                            y: snapToGrid(newPosition.y, GRID_SIZE)
-                        }
-                    }
-                } else if (selectedBlocks.has(b.id) && selectedBlocks.size > 1) {
-                    return {
-                        ...b,
-                        position: {
-                            ...b.position,
-                            x: snapToGrid(b.position.x + deltaX, GRID_SIZE),
-                            y: snapToGrid(b.position.y + deltaY, GRID_SIZE)
-                        }
-                    }
-                }
-                return b
-            })
-        })
-    }, [selectedBlocks])
-
-   
-    /**
-     * Handle parameter changes
-     */
-    const handleBlockParameterChange = useCallback((blockId: string, newParameters: any[]) => {
-        setBlocks(prevBlocks => 
-            prevBlocks.map(block => {
-                if (block.id === blockId) {
-                    return {
-                        ...block,
-                        parameters: newParameters
-                    }
-                }
-                return block
-            })
+    // Rename a block
+    case 'RENAME_BLOCK': {
+      const updatedBlocks = state.blocks.map(b => 
+        b.id === action.oldId ? { ...b, id: action.newId } : b
+      )
+      
+      const updatedSelected = new Set(
+        Array.from(state.selected).map(id => 
+          id === action.oldId ? action.newId : id
         )
-    }, [])
+      )
+      
+      return {
+        ...state,
+        blocks: updatedBlocks,
+        selected: updatedSelected
+      }
+    }
 
-    /**
-     * Handle right-click context menu on blocks OR duplicate creation
-     */
-    // Add a mouse up handler to the document when drag-copy starts
-    const handleBlockContextMenu = useCallback((blockIdOrAction: string, deltaX: number, deltaY: number, anchorId?: string) => {
-        // Handle duplication (single or group)
-        if (blockIdOrAction.startsWith('duplicate:')) {
-            const [, originalId, type] = blockIdOrAction.split(':');
+    // Set ghost ids for blocks
+    case 'GHOST_SET':
+      return { ...state, ghostIds: new Set(action.ids) }
+    // Clear ghost ids
+    case 'GHOST_CLEAR':
+      return { ...state, ghostIds: new Set() }
 
-            // GROUP DUPLICATION
-            if (type === 'group' && selectedBlocks.size > 1 && selectedBlocks.has(originalId)) {
-                const newBlocks: BlockData[] = [];
-                const newBlockIds: string[] = [];
-                
-                const anchorBlock = blocks.find(b => b.id === anchorId || originalId);
+    // Delete a single block
+    case 'DELETE_BLOCK': {
+      const filtered = state.blocks.filter(b => b.id !== action.id)
+      const nextSel = new Set(state.selected)
+      nextSel.delete(action.id)
+      return { ...state, blocks: filtered, selected: nextSel }
+    }
+    // Delete all selected blocks
+    case 'DELETE_SELECTED':
+      return {
+        ...state,
+        blocks: state.blocks.filter(b => !state.selected.has(b.id)),
+        selected: new Set()
+      }
 
-                selectedBlocks.forEach(blockId => {
-                    const originalBlock = blocks.find(b => b.id === blockId);
-                    if (originalBlock && anchorBlock) {
-                        // Calculate offset from anchor block
-                        const offsetX = originalBlock.position.x - anchorBlock.position.x;
-                        const offsetY = originalBlock.position.y - anchorBlock.position.y;
-                        const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                        newBlockIds.push(newBlockId);
-                        newBlocks.push({
-                            ...originalBlock,
-                            id: newBlockId,
-                            position: {
-                                ...originalBlock.position,
-                                x: snapToGrid(anchorBlock.position.x + deltaX + offsetX, GRID_SIZE),
-                                y: snapToGrid(anchorBlock.position.y + deltaY + offsetY, GRID_SIZE)
-                            }
-                        });
-                    }
-                });
-
-                setBlocks(prev => [...prev, ...newBlocks]);
-                setGhostBlockIds(new Set(newBlockIds));
-                setSelectedBlocks(new Set(newBlockIds));
-                requestAnimationFrame(() => {
-                    setGhostBlockIds(new Set());
-                });
-                return;
-            
+    // Signal creation actions
+    case 'SIGNAL_START_CREATION': {
+        return {
+            ...state,
+            isCreatingSignal: true,
+            previewSignal: {
+                from: action.from,
+                to: action.from // Initially same point
             }
+        }
+    }
 
-            // SINGLE BLOCK DUPLICATION
-            const originalBlock = blocks.find(block => block.id === originalId);
-            if (originalBlock) {
-                const newBlockId = `${originalBlock.blockType}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                const newBlock: BlockData = {
-                    ...originalBlock,
-                    id: newBlockId,
-                    position: {
-                        x: snapToGrid(originalBlock.position.x + deltaX, GRID_SIZE),
-                        y: snapToGrid(originalBlock.position.y + deltaY, GRID_SIZE),
-                        width: originalBlock.position.width,
-                        height: originalBlock.position.height
-                    }
-                };
-                setBlocks(prev => [...prev, newBlock]);
-                setGhostBlockIds(new Set([newBlockId]));
-                setSelectedBlocks(new Set([newBlockId]));
-
-                requestAnimationFrame(() => {
-                    setGhostBlockIds(new Set());
-                });
+    case 'SIGNAL_UPDATE_PREVIEW': {
+        if (!state.isCreatingSignal || !state.previewSignal) return state
+        return {
+            ...state,
+            previewSignal: {
+                ...state.previewSignal,
+                to: action.to
             }
-            return;
         }
+    }
 
-    // Regular context menu (not duplication)
-    setGhostBlockIds(new Set());
-        setContextMenu({
-            visible: true,
-            x,
-            y,
-            blockId: blockIdOrAction
-        });
-    }, [blocks, selectedBlocks]);
-
-// const handleDragEnd = useCallback(() => {
-//     setIsAnyBlockDragging(false)
-//     setGhostBlockIds(new Set()) // Clear all ghost blocks when drag ends
-// }, [])
-
-    // Close context menu when clicking elsewhere
-    const closeContextMenu = useCallback(() => {
-        setContextMenu(prev => ({ ...prev, visible: false }))
-    }, [])
-
-    /**
-     * Delete selected blocks or specific block
-     */
-    const deleteBlock = useCallback((blockId?: string) => {
-        if (blockId) {
-            // Delete specific block
-            setBlocks(prev => prev.filter(block => block.id !== blockId))
-            setSelectedBlocks(prev => {
-                const newSelected = new Set(prev)
-                newSelected.delete(blockId)
-                return newSelected
-            })
-        } else {
-            // Delete all selected blocks
-            setBlocks(prev => prev.filter(block => !selectedBlocks.has(block.id)))
-            setSelectedBlocks(new Set())
-        }
-        closeContextMenu()
-    }, [selectedBlocks, closeContextMenu])
-
-    /**
-     * Duplicate a specific block
-     */
-    const duplicateBlock = useCallback((blockId: string) => {
-        const blockToDuplicate = blocks.find(block => block.id === blockId)
-        if (blockToDuplicate) {
-            const newId = `${blockToDuplicate.blockType}_${Date.now()}`
-            const newBlock: BlockData = {
-                id: newId,
-                blockType: blockToDuplicate.blockType,
-                position: {
-                    x: blockToDuplicate.position.x + 50, // Offset the duplicate
-                    y: blockToDuplicate.position.y + 50,
-                    width: blockToDuplicate.position.width,
-                    height: blockToDuplicate.position.height
-                },
-                parameters: [...blockToDuplicate.parameters]
-            }
-            setBlocks(prev => [...prev, newBlock])
-        }
-        closeContextMenu()
-    }, [blocks, closeContextMenu])
-
-    /**
-     * Show properties dialog for a block
-     */
-    const showBlockProperties = useCallback((blockId: string) => {
-        const block = blocks.find(b => b.id === blockId)
-        if (block) {
-            console.log('Opening properties for block:', block)
-            // TODO: Implement properties dialog
-            alert(`Properties for ${block.blockType} (${blockId})`)
-        }
-        closeContextMenu()
-    }, [blocks, closeContextMenu])
-
-    
-    // Update context menu items to use these functions
-    const contextMenuItems = [
-        { 
-            label: 'Delete Block', 
-            action: () => contextMenu.blockId && deleteBlock(contextMenu.blockId)
-        },
-        { 
-            label: 'Duplicate Block', 
-            action: () => contextMenu.blockId && duplicateBlock(contextMenu.blockId)
-        },
-        { 
-            label: 'Properties', 
-            action: () => contextMenu.blockId && showBlockProperties(contextMenu.blockId)
-        }
-    ]   
-
-    // Update the key function to be stable during drag operations
-    // const getAdaptiveKey = useCallback((block: BlockData) => {
-    //     if (isAnyBlockDragging) {
-    //         // During drag/resize, use only block ID for stability
-    //         return block.id
-    //     } else {
-    //         // When not dragging, use grid-snapped key for proper positioning
-    //         const snappedX = snapToGrid(block.position.x, GRID_SIZE)
-    //         const snappedY = snapToGrid(block.position.y, GRID_SIZE)
-    //         return `${block.id}-${snappedX}-${snappedY}`
-    //     }
-    // }, [isAnyBlockDragging])
-
-    const getStableKey = useCallback((block: BlockData) => {
-        // Use position only when NOT dragging to prevent flicker
-        // During drag, React will re-render based on state changes anyway
-        if (isAnyBlockDragging) {
-            return block.id
+    case 'SIGNAL_COMPLETE_CREATION': {
+        if (!state.isCreatingSignal || !state.previewSignal) return state
+        
+        // Generate unique signal ID
+        const signalId = `signal-${Date.now()}`
+        
+        const newSignal: SignalData = {
+            id: signalId,
+            fromBlockId: action.blockId,
+            fromPortIndex: action.portIndex,
+            toBlockId: action.toBlockId,
+            toPortIndex: action.toPortIndex,
+            from: state.previewSignal.from,
+            to: state.previewSignal.to,
+            selected: false
         }
         
-        // When not dragging, include position for proper updates
-        return `${block.id}-${block.position.x}-${block.position.y}`
-    }, [isAnyBlockDragging])
-
-
-
-
-    const renderGrid = useCallback(() => {
-        const lines = []
-        const viewBox = { width: 2400, height: 1600 } // From your SVG viewBox
-        
-        // Vertical lines
-        for (let x = 0; x <= viewBox.width; x += GRID_SIZE) {
-            lines.push(
-                <line
-                    key={`v-${x}`}
-                    x1={x}
-                    y1={0}
-                    x2={x}
-                    y2={viewBox.height}
-                    stroke="rgba(0,0,0,0.1)"
-                    strokeWidth="0.5"
-                />
-            )
+        return {
+            ...state,
+            signals: [...state.signals, newSignal],
+            isCreatingSignal: false,
+            previewSignal: undefined
         }
-        
-        // Horizontal lines
-        for (let y = 0; y <= viewBox.height; y += GRID_SIZE) {
-            lines.push(
-                <line
-                    key={`h-${y}`}
-                    x1={0}
-                    y1={y}
-                    x2={viewBox.width}
-                    y2={y}
-                    stroke="rgba(0,0,0,0.1)"
-                    strokeWidth="0.5"
-                />
-            )
+      }
+
+      case 'SIGNAL_CANCEL_CREATION': {
+        return {
+            ...state,
+            isCreatingSignal: false,
+            previewSignal: undefined
         }
-        
-        return lines
-    }, [])
+    }
 
-    return (
-        <>
-            <svg 
-                ref={canvasRef}
-                id="blockCanvas" 
-                className={styles.canvasContainer} 
-                xmlns="http://www.w3.org/2000/svg" 
-                viewBox="0 0 2400 1600"
-                onMouseDown={handleCanvasMouseDown}
-                onClick={closeContextMenu}
-                style={{
-                    userSelect: 'none',           // Prevent text selection
-                    WebkitUserSelect: 'none',     // Safari
-                    MozUserSelect: 'none',        // Firefox
-                    msUserSelect: 'none',         // IE/Edge
-                    cursor: 'default'             // Ensure default cursor
-                }}
-            >
-                <rect 
-                    x="0" 
-                    y="0" 
-                    width="100%" 
-                    height="100%" 
-                    fill="#d1d1d1ff"
-                />
+    case 'SIGNAL_SELECT': {
+        return {
+            ...state,
+            signals: state.signals.map(signal => ({
+                ...signal,
+                selected: signal.id === action.signalId
+            }))
+        }
+    }
 
-                {renderGrid()}
-                
-                {/* Selection box */}
-                {selectionBox.isActive && (
-                    <rect
-                        x={Math.min(selectionBox.startX, selectionBox.currentX)}
-                        y={Math.min(selectionBox.startY, selectionBox.currentY)}
-                        width={Math.abs(selectionBox.currentX - selectionBox.startX)}
-                        height={Math.abs(selectionBox.currentY - selectionBox.startY)}
-                        fill="rgba(0, 100, 255, 0.1)"
-                        stroke="rgba(0, 100, 255, 0.5)"
-                        strokeWidth="1"
-                        strokeDasharray="3,3"
-                    />
-                )}
-                
-                {/* Render all blocks */}
-                {blocks.map(block => (
-                    <Block
-                        key={block.id}
-                        id={block.id}
-                        blockType={block.blockType}
-                        position={block.position}
-                        parameters={block.parameters}
-                        selected={selectedBlocks.has(block.id)}
-                        ghost={ghostBlockIds.has(block.id)} // Fix: was "gghost"
-                        selectedBlocks={selectedBlocksArray}
-                        onStartGroupDragCopy={handleStartGroupDragCopy}
-                        onParameterChange={handleBlockParameterChange}
-                        onPositionChange={handleBlockPositionChange}
-                        onContextMenu={handleBlockContextMenu}
-                        onSelect={handleBlockSelect}
-                        onDragStart={handleDragStart}
-                        onDragEnd={handleDragEnd}
-                    />
-                ))}
-                
-                <text 
-                    x="600" 
-                    y="400" 
-                    textAnchor="middle" 
-                    fontSize="48" 
-                    fill="#333"
-                    style={{ 
-                        userSelect: 'none', 
-                        pointerEvents: 'none'  // This is key - makes text non-interactive
-                    }}
-                >
-                    Canvas Component
-                </text>
-                <text 
-                    x="600" 
-                    y="500" 
-                    textAnchor="middle" 
-                    fontSize="24" 
-                    fill="#666"
-                    style={{ 
-                        userSelect: 'none', 
-                        pointerEvents: 'none'  // This is key - makes text non-interactive
-                    }}
-                >
-                    {blocks.length} blocks on canvas ({selectedBlocks.size} selected)
-                </text>
-            </svg>
+    case 'SIGNAL_DELETE': {
+        return {
+            ...state,
+            signals: state.signals.filter(signal => signal.id !== action.signalId)
+        }
+    }
 
-            {/* Context Menu */}
-            {contextMenu.visible && (
-                <ContextMenu
-                    x={contextMenu.x}
-                    y={contextMenu.y}
-                    items={contextMenuItems}
-                    onClose={closeContextMenu}
-                    visible={contextMenu.visible}
-                />
-            )}
-        </>
-    )
+
+
+    // Default: return unchanged state
+    default:
+      return state
+  }
 }
 
+/**
+ * Canvas component renders the block diagram editor.
+ * Handles block rendering, selection, drag, duplication, context menu, and grid.
+ * @component
+ */
+export default function Canvas() {
+  const [state, dispatch] = useReducer(reducer, initialState)
+  const canvasRef = useRef<SVGSVGElement>(null)
+
+  // Selection box refs
+  const isSelectionDragging = useRef(false)
+  const selectedBlocksArray = useMemo(
+    () => Array.from(state.selected),
+    [state.selected]
+  )
+
+  // Load block configs once on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        await blockConfigManager.initialize()
+      } catch {
+        // ignore
+      } finally {
+        dispatch({ type: 'CONFIGS_LOADED' })
+      }
+    })()
+  }, [])
+
+  /**
+   * Get mouse position relative to SVG canvas coordinates.
+   * @param {MouseEvent|React.MouseEvent} e
+   * @returns {{x: number, y: number}}
+   */
+  const getSVGMousePosition = useCallback(
+    (e: MouseEvent | React.MouseEvent) => {
+      if (!canvasRef.current)
+        return { x: 0, y: 0 }
+      const svg = canvasRef.current
+      const rect = svg.getBoundingClientRect()
+      const viewBox = svg.viewBox.baseVal
+      const scaleX = viewBox.width / rect.width
+      const scaleY = viewBox.height / rect.height
+      return {
+        x: (e.clientX - rect.left) * scaleX + viewBox.x,
+        y: (e.clientY - rect.top) * scaleY + viewBox.y
+      }
+    },
+    []
+  )
+
+  /**
+   * Handle mouse down on canvas for selection box.
+   * @param {React.MouseEvent} e
+   */
+  const handleCanvasMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return
+      
+      const tgt = e.target as SVGElement
+      
+      // Check if click is on a block element
+      const isBlockElement = tgt.closest('[data-block-id]') !== null
+      
+      // Only handle canvas-level clicks (not on blocks)
+      if (!isBlockElement) {
+        e.preventDefault()
+        dispatch({ type: 'SELECT_CLEAR' })
+        const p = getSVGMousePosition(e)
+        dispatch({ type: 'SELECTION_BOX_START', x: p.x, y: p.y })
+        isSelectionDragging.current = true
+
+        const move = (me: MouseEvent) => {
+          if (!isSelectionDragging.current) return
+          const cp = getSVGMousePosition(me)
+          dispatch({ type: 'SELECTION_BOX_UPDATE', x: cp.x, y: cp.y })
+        }
+        const up = () => {
+          isSelectionDragging.current = false
+          dispatch({ type: 'SELECTION_BOX_END' })
+          document.removeEventListener('mousemove', move)
+          document.removeEventListener('mouseup', up)
+          document.removeEventListener('mouseleave', up)
+        }
+        document.addEventListener('mousemove', move)
+        document.addEventListener('mouseup', up)
+        document.addEventListener('mouseleave', up)
+      }
+    },
+    [getSVGMousePosition]
+  )
+
+  /** Start dragging blocks */
+  const handleDragStart = useCallback(
+    () => dispatch({ type: 'DRAG_START' }),
+    []
+  )
+  /** End dragging blocks */
+  const handleDragEnd = useCallback(
+    () => dispatch({ type: 'DRAG_END' }),
+    []
+  )
+
+  /**
+   * Handle block selection.
+   * @param {string} id
+   * @param {boolean} isSelected
+   * @param {boolean} multi
+   */
+  const handleBlockSelect = useCallback(
+    (id: string, isSelected: boolean, multi: boolean) => {
+      if (multi) {
+        dispatch({ type: 'SELECT_TOGGLE', id })
+      } else {
+        dispatch({ type: 'SELECT_SET', ids: isSelected ? [id] : [] })
+      }
+    },
+    []
+  )
+
+  /**
+   * Handle block position or resize change.
+   * @param {string} blockId
+   * @param {Position} pos
+   */
+  const handleBlockPositionChange = useCallback(
+    (blockId: string, pos: Position) => {
+      const groupDrag =
+        state.selected.size > 1 && state.selected.has(blockId)
+      dispatch({
+        type: 'BLOCK_POSITION_CHANGE',
+        id: blockId,
+        pos,
+        groupDrag
+      })
+    },
+    [state.selected]
+  )
+
+  /**
+   * Handle block parameter change.
+   * @param {string} id
+   * @param {any[]} parameters
+   */
+  const handleBlockParameterChange = useCallback(
+    (id: string, parameters: any[]) => {
+      dispatch({ type: 'BLOCK_PARAMETERS_UPDATE', id, parameters })
+    },
+    []
+  )
+
+  /**
+   * Handle context menu or duplication actions from Block.
+   * @param {string} blockIdOrAction
+   * @param {number} dx
+   * @param {number} dy
+   * @param {string} [anchorId]
+   */
+  const handleBlockContextMenu = useCallback(
+    (blockIdOrAction: string, dx: number, dy: number, anchorId?: string) => {
+
+      // If multiple blocks are selected and right-clicked block is in selection
+      const isGroup = state.selected.size > 1 && state.selected.has(blockIdOrAction)
+
+      if (blockIdOrAction.startsWith('duplicate:')) {
+        const parts = blockIdOrAction.split(':')
+        const originalId = parts[1]
+        const type = parts[2]
+
+        if (type === 'group' && anchorId) {
+          dispatch({
+            type: 'DUPLICATE_GROUP',
+            anchorId,
+            dx,
+            dy
+          })
+          // schedule ghost clear
+          requestAnimationFrame(() =>
+            dispatch({ type: 'GHOST_CLEAR' })
+          )
+          return
+        }
+
+        // single
+        dispatch({
+          type: 'DUPLICATE_SINGLE',
+          originalId,
+          dx,
+          dy
+        })
+        requestAnimationFrame(() =>
+          dispatch({ type: 'GHOST_CLEAR' })
+        )
+        return
+      }
+
+      // Normal context menu (dx/dy hold screen coords here)
+      dispatch({
+        type: 'CONTEXT_MENU_SHOW',
+        x: dx,
+        y: dy,
+        blockId: isGroup ? null : blockIdOrAction
+      })
+    },
+    [state.selected]
+  )
+
+  /**
+   * Delete a block or all selected blocks.
+   * @param {string} [id]
+   */
+  const deleteBlock = useCallback(
+    (id?: string) => {
+      if (id) {
+        dispatch({ type: 'DELETE_BLOCK', id })
+      } else {
+        dispatch({ type: 'DELETE_SELECTED' })
+      }
+      dispatch({ type: 'CONTEXT_MENU_HIDE' })
+    },
+    []
+  )
+
+  /**
+   * Duplicate a block.
+   * @param {string} id
+   */
+  const duplicateBlock = useCallback(
+    (id: string) => {
+      dispatch({
+        type: 'DUPLICATE_SINGLE',
+        originalId: id,
+        dx: 50,
+        dy: 50
+      })
+      requestAnimationFrame(() =>
+        dispatch({ type: 'GHOST_CLEAR' })
+      )
+      dispatch({ type: 'CONTEXT_MENU_HIDE' })
+    },
+    []
+  )
+
+  /**
+   * Show block properties (currently alerts).
+   * @param {string} id
+   */
+  const showBlockProperties = useCallback(
+    (id: string) => {
+      const blk = state.blocks.find(b => b.id === id)
+      if (blk) {
+        alert(`Properties for ${blk.blockType} (${id})`)
+      }
+      dispatch({ type: 'CONTEXT_MENU_HIDE' })
+    },
+    [state.blocks]
+  )
+
+  /** Close context menu */
+  const closeContextMenu = useCallback(
+    () => dispatch({ type: 'CONTEXT_MENU_HIDE' }),
+    []
+  )
+
+  /** Rename a block */
+  const handleBlockRename = useCallback(
+    (oldId: string, newId: string) => {
+      dispatch({ type: 'RENAME_BLOCK', oldId, newId })
+    },
+    []
+  )
+
+  /**
+   * Handle mouse down event on a port.
+   */
+  const handlePortMouseDown = useCallback((
+      e: React.MouseEvent, 
+      blockId: string, 
+      portType: 'input' | 'output', 
+      portIndex: number,
+      absolutePos: Point
+  ) => {
+      // Only allow signal creation from output ports
+      if (portType === 'output') {
+          e.preventDefault()
+          e.stopPropagation()
+          
+          // Start signal creation
+          dispatch({
+              type: 'SIGNAL_START_CREATION',
+              from: absolutePos,
+              blockId,
+              portIndex
+          })
+          
+          // Track mouse movement for preview
+          const handleMouseMove = (moveEvent: MouseEvent) => {
+              const currentPos = getSVGMousePosition(moveEvent)
+              dispatch({
+                  type: 'SIGNAL_UPDATE_PREVIEW',
+                  to: currentPos
+              })
+          }
+          
+          // Handle mouse up to complete or cancel signal
+          const handleMouseUp = (upEvent: MouseEvent) => {
+              // Check if mouse up is over an input port
+              const target = upEvent.target as Element
+              const portElement = target.closest('circle[data-port-type="input"]')
+              
+              if (portElement) {
+                  const targetBlockId = portElement.getAttribute('data-block-id')
+                  const targetPortIndex = parseInt(portElement.getAttribute('data-port-index') || '0')
+                  
+                  if (targetBlockId) {
+                      // Complete the signal connection
+                      dispatch({
+                          type: 'SIGNAL_COMPLETE_CREATION',
+                          toBlockId: targetBlockId,
+                          toPortIndex: targetPortIndex
+                      })
+                  } else {
+                      // Cancel if no valid target
+                      dispatch({ type: 'SIGNAL_CANCEL_CREATION' })
+                  }
+              } else {
+                  // Cancel if not over a port
+                  dispatch({ type: 'SIGNAL_CANCEL_CREATION' })
+              }
+              
+              // Cleanup event listeners
+              document.removeEventListener('mousemove', handleMouseMove)
+              document.removeEventListener('mouseup', handleMouseUp)
+          }
+          
+          // Add event listeners
+          document.addEventListener('mousemove', handleMouseMove)
+          document.addEventListener('mouseup', handleMouseUp)
+      }
+  }, [dispatch, getSVGMousePosition])
+
+
+  /**
+   * Context menu items for blocks.
+   */
+  const singleBlockMenuItems = [
+    { label: 'Delete Block', action: () => state.contextMenu.blockId && deleteBlock(state.contextMenu.blockId) },
+    { label: 'Duplicate Block', action: () => state.contextMenu.blockId && duplicateBlock(state.contextMenu.blockId) },
+    { label: 'Properties', action: () => state.contextMenu.blockId && showBlockProperties(state.contextMenu.blockId) }
+  ]
+
+  const groupMenuItems = [
+    { label: 'Delete Selected Blocks', action: () => deleteBlock() },
+    { label: 'Duplicate Group', action: () => {
+        // Use anchor block for duplication (e.g., last right-clicked)
+        const anchorId = selectedBlocksArray[0]
+        dispatch({ type: 'DUPLICATE_GROUP', anchorId, dx: 50, dy: 50 })
+        requestAnimationFrame(() => dispatch({ type: 'GHOST_CLEAR' }))
+        dispatch({ type: 'CONTEXT_MENU_HIDE' })
+      }
+    },
+    { label: 'Group Properties', action: () => alert(`Properties for ${state.selected.size} blocks`) }
+  ]
+
+  /**
+   * Render grid lines for the canvas.
+   * @returns {JSX.Element[]}
+   */
+  const renderGrid = useCallback(() => {
+    const lines: JSX.Element[] = []
+    const viewBox = { width: 2400, height: 1600 }
+    for (let x = 0; x <= viewBox.width; x += GRID_SIZE) {
+      lines.push(
+        <line
+          key={`vx-${x}`}
+          x1={x}
+          y1={0}
+          x2={x}
+          y2={viewBox.height}
+          stroke="rgba(0,0,0,0.1)"
+          strokeWidth="0.5"
+        />
+      )
+    }
+    for (let y = 0; y <= viewBox.height; y += GRID_SIZE) {
+      lines.push(
+        <line
+          key={`hy-${y}`}
+          x1={0}
+          y1={y}
+          x2={viewBox.width}
+          y2={y}
+          stroke="rgba(0,0,0,0.1)"
+          strokeWidth="0.5"
+        />
+      )
+    }
+    return lines
+  }, [])
+
+  return (
+    <>
+      <svg
+        ref={canvasRef}
+        id="blockCanvas"
+        className={styles.canvasContainer}
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 2400 1600"
+        onMouseDown={handleCanvasMouseDown}
+        onClick={closeContextMenu}
+        style={{
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          MozUserSelect: 'none',
+          msUserSelect: 'none',
+          cursor: 'default'
+        }}
+      >
+        <rect
+          x="0"
+          y="0"
+          width="100%"
+          height="100%"
+          fill="#e7e7e7ff"
+        />
+
+        {/* {renderGrid()} */}
+
+        {state.selectionBox.isActive && (
+          <rect
+            x={Math.min(
+              state.selectionBox.startX,
+              state.selectionBox.currentX
+            )}
+            y={Math.min(
+              state.selectionBox.startY,
+              state.selectionBox.currentY
+            )}
+            width={Math.abs(
+              state.selectionBox.currentX - state.selectionBox.startX
+            )}
+            height={Math.abs(
+              state.selectionBox.currentY - state.selectionBox.startY
+            )}
+            fill="rgba(0,100,255,0.1)"
+            stroke="rgba(0,100,255,0.5)"
+            strokeWidth="1"
+            strokeDasharray="3,3"
+          />
+        )}
+
+        {state.blocks.map(block => (
+          <Block
+            key={block.id}
+            id={block.id}
+            blockType={block.blockType}
+            position={block.position}
+            parameters={block.parameters}
+            selected={state.selected.has(block.id)}
+            ghost={state.ghostIds.has(block.id)}
+            selectedBlocks={selectedBlocksArray}
+            onStartGroupDragCopy={() => {}}
+            onParameterChange={handleBlockParameterChange}
+            onPositionChange={handleBlockPositionChange}
+            onContextMenu={handleBlockContextMenu}
+            onSelect={handleBlockSelect}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            allBlocks={state.blocks} // Add this line
+            onRename={handleBlockRename} // Add this line
+            onPortMouseDown={handlePortMouseDown} // Add this line
+          />
+        ))}
+
+        {/* <text
+          x="600"
+          y="400"
+          textAnchor="middle"
+          fontSize="48"
+          fill="#333"
+          style={{ userSelect: 'none', pointerEvents: 'none' }}
+        >
+          Canvas Component
+        </text>
+        <text
+          x="600"
+          y="500"
+          textAnchor="middle"
+          fontSize="24"
+          fill="#666"
+          style={{ userSelect: 'none', pointerEvents: 'none' }}
+        >
+          {state.blocks.length} blocks on canvas ({state.selected.size}{' '}
+          selected)
+        </text> */}
+        {/* Signals */}
+      {state.signals.map((signal) => (
+          <Signal
+              key={signal.id}
+              id={signal.id}
+              from={signal.from}
+              to={signal.to}
+              selected={signal.selected}
+              preview={false}
+              onClick={(id) => dispatch({ type: 'SIGNAL_SELECT', signalId: id })}
+              onContextMenu={(id) => dispatch({ type: 'SIGNAL_DELETE', signalId: id })}
+          />
+      ))}
+      
+      {/* Preview signal during creation */}
+      {state.isCreatingSignal && state.previewSignal && (
+          <Signal
+              id="preview"
+              from={state.previewSignal.from}
+              to={state.previewSignal.to}
+              preview={true}
+          />
+      )}
+      </svg>
+
+
+      
+
+      {state.contextMenu.visible && (
+        <ContextMenu
+          x={state.contextMenu.x}
+          y={state.contextMenu.y}
+          items={state.contextMenu.blockId ? singleBlockMenuItems : groupMenuItems}
+          onClose={closeContextMenu}
+          visible={state.contextMenu.visible}
+        />
+      )}
+    </>
+  )
+}
+
+function escapeRegExp(s: string) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function displayBaseName(blockType: string) {
+    if (!blockType) return 'Block';
+    return blockType.charAt(0).toUpperCase() + blockType.slice(1);
+}
+
+/**
+ * Get the next available name for a base, reusing freed indices.
+ * If the base already has a number, extract the base part for consistent numbering
+ */
+function getNextAvailableName(base: string, existingNames: string[]) {
+    // Extract the actual base name if it already has a number
+    // e.g. "value" stays "value", "value1" becomes "value", "Gain2" becomes "Gain"
+    const match = base.match(/^(.+?)(\d+)?$/);
+    const actualBase = match ? match[1] : base;
+    
+    const used = new Set<number>();
+    const baseEsc = escapeRegExp(actualBase);
+    const re = new RegExp(`^${baseEsc}(\\d+)?$`);
+    
+    for (const n of existingNames) {
+        const m = String(n).match(re);
+        if (!m) continue;
+        if (!m[1]) used.add(0);
+        else used.add(parseInt(m[1], 10));
+    }
+    
+    for (let i = 0; ; i++) {
+        if (!used.has(i)) return i === 0 ? actualBase : `${actualBase}${i}`;
+    }
+}

@@ -33,7 +33,7 @@ class MaskManager {
             }
 
             // Load from file
-            const response = await fetch(`/${blockType.toLowerCase()}.mask.json`)
+            const response = await fetch(`/lib/${blockType.toLowerCase()}.mask.json`)
             if (!response.ok) {
                 return null
             }

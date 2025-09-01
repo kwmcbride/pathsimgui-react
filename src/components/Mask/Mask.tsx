@@ -164,13 +164,32 @@ export default function Mask({
      * Replace parameter placeholders in text with actual values
      */
     const interpolateText = (text: string): string => {
+        console.log('=== interpolateText Debug ===')
+        console.log('blockType:', blockType)
+        console.log('text to interpolate:', text)
+        console.log('parameters:', parameters)
+        console.log('maskConfig?.parameterBindings:', maskConfig?.parameterBindings)
+        
         return text.replace(/\$\{(\w+)\}/g, (match, paramName) => {
+            console.log(`Looking for parameter: ${paramName}`)
+            
             const param = parameters.find(p => p.name === paramName)
-            if (!param) return match
+            console.log(`Found parameter:`, param)
+            
+            if (!param) {
+                console.log(`Parameter ${paramName} not found, returning: ${match}`)
+                return match
+            }
 
             const binding = maskConfig?.parameterBindings[paramName]
-            if (!binding) return String(param.value)
+            console.log(`Parameter binding for ${paramName}:`, binding)
+            
+            if (!binding) {
+                console.log(`No binding found, returning value: ${String(param.value)}`)
+                return String(param.value)
+            }
 
+            // ... rest of the binding logic
             switch (binding.displayFormat) {
                 case 'number':
                     const numValue = Number(param.value)

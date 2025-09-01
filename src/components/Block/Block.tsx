@@ -4,7 +4,9 @@ import Mask from '../Mask/Mask'
 import EditableLabel from '../interface/EditableLabel'
 import blockConfigManager from '../../lib/BlockConfigManager'
 import { snapToGrid, GRID_SIZE } from '../../utilities/grid'
-import generalConfig from '../../config/generalConfig'
+import generalConfig from '../../config/generalConfig.json'
+import { Point } from '../Signal/Signal'
+import { BlockConfiguration } from '../../lib/BlockConfigManager'
 
 /**
  * Represents the position and size of a block on the canvas.
@@ -47,6 +49,7 @@ interface BlockProps {
     onDragStart?: () => void
     onDragEnd?: () => void
     onRename?: (oldId: string, newId: string) => void
+    onPortMouseDown?: (e: React.MouseEvent, blockId: string, portType: 'input' | 'output', portIndex: number, absolutePos: Point) => void
 }
 
 /**
@@ -59,9 +62,6 @@ interface BlockStyle {
     resizeCornerSize: number
     portSize: number
 }
-
-
-
 
 /**
  * Block component representing a draggable, configurable block on the canvas.
@@ -84,25 +84,47 @@ function Block({
     onSelect,
     onDragStart,
     onDragEnd,
-    onRename
+    onRename,
+    onPortMouseDown
 }: BlockProps) {
     // State hooks, these need to be at the top
 
     // console.log(`🔄 Block ${id} rendering. Position:`, initialPosition, 'Selected:', selected)
     const config = generalConfig.blocks;
+    console.log('generalConfig.blocks:', generalConfig.blocks)
 
     // Seems redundant
-    const blockConfig = blockConfigManager.getConfiguration(blockType) || {
-        blockType,
-        displayName: blockType,
-        ports: { inputs: 1, outputs: 1 },
-        styling: {
-            defaultSize: { width: config.defaultWidth, height: config.defaultHeight },
-            color: config.backgroundColor,
-            borderColor: config.borderColor,
-            textColor: config.fontColor
-        }}
+    const blockConfig = useMemo(() => {
+        const loadedConfig = blockConfigManager.getConfiguration(blockType)
+        
+        if (loadedConfig) {
+            return loadedConfig
+        }
+        
+        // Provide block-type-specific fallbacks instead of generic ones
+        const fallbackConfig = {
+            blockType,
+            displayName: blockType,
+            ports: blockType === 'constant' 
+                ? { inputs: 0, outputs: 1 }  // Constant blocks have no inputs
+                : blockType === 'gain'
+                ? { inputs: 1, outputs: 1 }  // Gain blocks have 1 input, 1 output
+                : { inputs: 1, outputs: 1 }, // Default fallback
+            styling: {
+                defaultSize: { 
+                    width: config.defaultWidth || 100,   // Use generalConfig.blocks.defaultWidth
+                    height: config.defaultHeight || 60   // Use generalConfig.blocks.defaultHeight
+                },
+                color: config.backgroundColor || '#ffffff',
+                borderColor: config.borderColor || '#000000',
+                textColor: config.fontColor || '#000000'
+            }
+        }
+        
+        return fallbackConfig
+    }, [blockType, config.defaultWidth, config.defaultHeight, config.backgroundColor, config.borderColor, config.fontColor])
 
+    
     // Block styling
     const blockStyle: BlockStyle = {
         fill: blockConfig?.styling.color || config.backgroundColor,
@@ -136,13 +158,25 @@ function Block({
     const [editingLabelText, setEditingLabelText] = useState(id)
 
     // Parameters for the block (editable by user)
-    const [blockParameters, setBlockParameters] = useState<BlockParameter[]>(
-        parameters.length > 0 ? parameters : [
-            { name: 'gain', value: 1.0, type: 'number', description: 'Gain factor' },
-            { name: 'enabled', value: true, type: 'boolean', description: 'Enable this block' },
-            { name: 'name', value: 'test', type: 'string', description: 'Block name' }
-        ]
-    )
+    const [blockParameters, setBlockParameters] = useState<BlockParameter[]>(() => {
+        if (parameters.length > 0) return parameters
+        
+        // Default parameters based on block type
+        switch (blockType) {
+            case 'constant':
+                return [
+                    { name: 'value', value: 1.0, type: 'number', description: 'Constant output value' }
+                ]
+            case 'gain':
+                return [
+                    { name: 'gain', value: 1.0, type: 'number', description: 'Gain factor' }
+                ]
+            default:
+                return [
+                    { name: 'value', value: 1.0, type: 'number', description: 'Block value' }
+                ]
+        }
+    })
 
     // Ref hooks for managing state during interactions
     // Drag and resize state tracking
@@ -164,48 +198,48 @@ function Block({
     
     // Also update your position sync effect to be less restrictive:
     useEffect(() => {
-    // Guard: need valid incoming coords
-    if (initialPosition.x == null || initialPosition.y == null) return
+        // Guard: need valid incoming coords
+        if (initialPosition.x == null || initialPosition.y == null) return
 
-    const incoming = {
-        x: initialPosition.x,
-        y: initialPosition.y,
-        width: initialPosition.width ?? position.width,
-        height: initialPosition.height ?? position.height
-    }
-
-    const changed =
-        incoming.x !== position.x ||
-        incoming.y !== position.y ||
-        incoming.width !== position.width ||
-        incoming.height !== position.height
-
-    if (!changed) return
-
-    // If dragging a single block we are already updating local state in handleMouseMove;
-    // letting parent overwrite every frame can introduce jitter. So skip during single drag.
-    if (isDraggingRef.current) {
-        const isGroupDrag = selected && selectedBlocks && selectedBlocks.length > 1
-        if (!isGroupDrag) {
-            // Single-block drag: ignore parent updates mid-drag
-            return
+        const incoming = {
+            x: initialPosition.x,
+            y: initialPosition.y,
+            width: initialPosition.width ?? position.width,
+            height: initialPosition.height ?? position.height
         }
-        // Group drag: accept parent updates so lead block moves with the group
-    }
 
-    setPosition(incoming)
-}, [
-    initialPosition.x,
-    initialPosition.y,
-    initialPosition.width,
-    initialPosition.height,
-    selected,
-    selectedBlocks,
-    position.x,
-    position.y,
-    position.width,
-    position.height
-])
+        const changed =
+            incoming.x !== position.x ||
+            incoming.y !== position.y ||
+            incoming.width !== position.width ||
+            incoming.height !== position.height
+
+        if (!changed) return
+
+        // If dragging a single block we are already updating local state in handleMouseMove;
+        // letting parent overwrite every frame can introduce jitter. So skip during single drag.
+        if (isDraggingRef.current) {
+            const isGroupDrag = selected && selectedBlocks && selectedBlocks.length > 1
+            if (!isGroupDrag) {
+                // Single-block drag: ignore parent updates mid-drag
+                return
+            }
+            // Group drag: accept parent updates so lead block moves with the group
+        }
+
+        setPosition(incoming)
+    }, [
+        initialPosition.x,
+        initialPosition.y,
+        initialPosition.width,
+        initialPosition.height,
+        selected,
+        selectedBlocks,
+        position.x,
+        position.y,
+        position.width,
+        position.height
+    ])
 
     /**
      * Updates block size to match config defaults if not set in initialPosition.
@@ -232,6 +266,24 @@ function Block({
             }
         }
     }, [])
+
+    /**
+     * Bring block to front when selected or being dragged
+     */
+    useEffect(() => {
+        if ((selected || isDragging) && !isPreview) {
+            const blockElement = document.getElementById(`${id}-group`)
+            if (blockElement && blockElement.parentNode) {
+                // Move this element to the end of its parent (highest z-index)
+                blockElement.parentNode.appendChild(blockElement)
+            }
+        }
+    }, [selected, isDragging, isPreview, id])
+
+
+    useEffect(() => {
+        console.log(`Block ${id} (${blockType}) - inputs: ${blockConfig.ports.inputs}, outputs: ${blockConfig.ports.outputs}`)
+    }, [id, blockType, blockConfig.ports.inputs, blockConfig.ports.outputs])
 
 
     // All callbacks
@@ -333,15 +385,11 @@ function Block({
 
     // Create stable resize move handler
     const handleResizeMove = useCallback((e: MouseEvent) => {
-        console.log('handleResizeMove called, handle:', resizeHandleRef.current);
-    
         if (!resizeHandleRef.current) {
-            console.log('No resize handle set, returning');
             return;
         }
         
         const currentMouse = getSVGMousePosition(e);
-        // console.log('Current mouse position:', currentMouse);
         const handle = resizeHandleRef.current;
         
         const deltaX = currentMouse.x - resizeStartRef.current.x;
@@ -375,44 +423,35 @@ function Block({
                 break;
         }
 
-        onPositionChange?.(id, {
+        const newPosition = {
             x: newX,
             y: newY,
             width: newWidth,
             height: newHeight
-        });
-        
+        };
+
+        // Update local state immediately for smooth rendering
         setPosition(currentPosition => {
-            const newPosition = {
-                x: newX,
-                y: newY,
-                width: newWidth,
-                height: newHeight
-            };
-            
-            // Force re-render by ensuring we return a new object
-            // Check if values actually changed
+            // Only update if values actually changed
             if (currentPosition.x === newPosition.x && 
                 currentPosition.y === newPosition.y && 
                 currentPosition.width === newPosition.width && 
                 currentPosition.height === newPosition.height) {
-                // Values are the same, but still return new object to force re-render
-                return { ...newPosition };
+                return currentPosition;
             }
-            
-            // console.log('Setting new position:', newPosition);
-            // console.log('Previous position was:', currentPosition);
             return newPosition;
         });
 
-        // console.log('Setting new position:', { x: newX, y: newY, width: newWidth, height: newHeight });
-    }, [getSVGMousePosition]);
+        // Schedule Canvas update for next tick to avoid render cycle conflict
+        setTimeout(() => {
+            onPositionChange?.(id, newPosition);
+        }, 0);
+
+    }, [getSVGMousePosition, config.minWidth, config.minHeight, id, onPositionChange]);
 
     // Create stable resize up handler
     const handleResizeUp = useCallback(() => {
-        // console.log('handleResizeUp called, isResizingRef was:', isResizingRef.current);
-        isResizingRef.current = false;  // Clear ref IMMEDIATELY
-        // console.log('handleResizeUp set isResizingRef to:', isResizingRef.current);
+        isResizingRef.current = false;
         setIsResizing(false)
         resizeHandleRef.current = ''
         onDragEnd?.()
@@ -426,15 +465,17 @@ function Block({
                 height: snapToGrid(currentPosition.height, GRID_SIZE)
             }
             
-            // Notify Canvas once at the end
-            onPositionChange?.(id, finalPosition)
+            // Schedule final Canvas update for next tick
+            setTimeout(() => {
+                onPositionChange?.(id, finalPosition);
+            }, 0);
             
             return finalPosition
         })
         
         document.removeEventListener('mousemove', handleResizeMove)
         document.removeEventListener('mouseup', handleResizeUp)
-    }, [id, onPositionChange, onDragEnd])
+    }, [id, onPositionChange, onDragEnd, handleResizeMove])
 
 
     /**
@@ -442,7 +483,7 @@ function Block({
      * Initiates resizing logic for the block.
      */
     const handleResizeMouseDown = useCallback((e: React.MouseEvent, handle: string) => {
-        console.log('handleResizeMouseDown called with handle:', handle);
+        // console.log('handleResizeMouseDown called with handle:', handle);
         if (e.button === 0) { // Only handle left mouse button
 
             // e.stopPropagation();
@@ -451,10 +492,10 @@ function Block({
             // Set BOTH ref AND state to ensure effect sees the change
             isResizingRef.current = true;
             setIsResizing(true);
-            console.log('Set isResizingRef.current to:', isResizingRef.current, 'and isResizing state to: true');
+            // console.log('Set isResizingRef.current to:', isResizingRef.current, 'and isResizing state to: true');
             
             const svgMousePos = getSVGMousePosition(e);
-            console.log('Initial SVG position:', svgMousePos);
+            // console.log('Initial SVG position:', svgMousePos);
             
             resizeStartRef.current = svgMousePos;
             initialSizeRef.current = { width: position.width, height: position.height };
@@ -462,7 +503,7 @@ function Block({
             resizeHandleRef.current = handle;
             onDragStart?.();
             
-            console.log('Adding event listeners for resize');
+            // console.log('Adding event listeners for resize');
             document.addEventListener('mousemove', handleResizeMove);
             document.addEventListener('mouseup', handleResizeUp);
         }
@@ -656,7 +697,9 @@ function Block({
                             : { x: offsetX, y: offsetY }; // <-- Use offset for single block
                         const newX = startPoint.x + deltaX + offset.x;
                         const newY = startPoint.y + deltaY + offset.y;
-                        duplicateElement.setAttribute('transform', `translate(${newX}, ${newY})`);
+                        const snappedX = snapToGrid(newX, GRID_SIZE);
+                        const snappedY = snapToGrid(newY, GRID_SIZE);
+                        duplicateElement.setAttribute('transform', `translate(${snappedX}, ${snappedY})`);
                     });
                 }
             };
@@ -810,6 +853,44 @@ function Block({
             }
         }, 100)
     }, [isEditingLabel, handleLabelSave])
+
+
+    const inputPorts = useMemo(() => {
+        return Array.from({ length: blockConfig.ports.inputs }, (_, index) => {
+            const portPos = calculateInputPortPosition(index, blockConfig.ports.inputs)
+            return (
+                <Port
+                    key={`input-${index}`}
+                    blockId={id}
+                    portType="input"
+                    portIndex={index}
+                    x={portPos.x}
+                    y={portPos.y}
+                    size={blockStyle.portSize}
+                    onPortMouseDown={handlePortMouseDown}
+                />
+            )
+        })
+    }, [blockConfig.ports.inputs, id, blockStyle.portSize, handlePortMouseDown, calculateInputPortPosition])
+
+    const outputPorts = useMemo(() => {
+        return Array.from({ length: blockConfig.ports.outputs }, (_, index) => {
+            const portPos = calculateOutputPortPosition(index, blockConfig.ports.outputs)
+            return (
+                <Port
+                    key={`output-${index}`}
+                    blockId={id}
+                    portType="output"
+                    portIndex={index}
+                    x={portPos.x}
+                    y={portPos.y}
+                    size={blockStyle.portSize}
+                    onPortMouseDown={onPortMouseDown}
+                />
+            )
+        })
+    }, [blockConfig.ports.outputs, id, blockStyle.portSize, onPortMouseDown, calculateOutputPortPosition])
+
     
 
     // NOW WE CAN DO EARLY RETURNS AFTER ALL HOOKS ARE DECLARED
@@ -819,6 +900,7 @@ function Block({
         <>
             <g
                 id={`${id}-group`}
+                data-block-id={id} 
                 transform={`translate(${position.x}, ${position.y})`}
                 style={{
                     opacity: ghost ? config.copyOpacity : 1,
@@ -874,7 +956,7 @@ function Block({
                             x={portPos.x}
                             y={portPos.y}
                             size={blockStyle.portSize}
-                            onPortMouseDown={handlePortMouseDown}
+                            onPortMouseDown={onPortMouseDown}
                         />
                     )
                 })}
@@ -957,22 +1039,30 @@ function Block({
                 )} */}
 
 
-                {isEditingLabel ? (
+
+
+                // Replace the label section with this simple version that doesn't cause screen jumping:
+
+{isEditingLabel ? (
     <foreignObject
-        x={position.width / 2 - 50}
+        x={position.width / 2 - Math.max(60, Math.min(150, editingLabelText.length * 8 + 20)) / 2}
         y={position.height + 5}
-        width={100}
+        width={Math.max(60, Math.min(150, editingLabelText.length * 8 + 20)) + 10}
         height={30}
     >
         <input
             ref={labelInputRef}
             type="text"
             value={editingLabelText}
-            onChange={(e) => setEditingLabelText(e.target.value)}
+            onChange={(e) => {
+                setEditingLabelText(e.target.value)
+            }}
             onKeyDown={(e) => {
                 e.stopPropagation()
+                
                 if (e.key === 'Enter') {
                     e.preventDefault()
+                    
                     const newName = editingLabelText.trim()
                     if (newName && newName !== id && onRename) {
                         onRename(id, newName)
@@ -980,11 +1070,13 @@ function Block({
                     setIsEditingLabel(false)
                 } else if (e.key === 'Escape') {
                     e.preventDefault()
+                    
                     setEditingLabelText(id)
                     setIsEditingLabel(false)
                 }
             }}
-            onBlur={() => {
+            onBlur={(e) => {
+                e.stopPropagation()
                 const newName = editingLabelText.trim()
                 if (newName && newName !== id && onRename) {
                     onRename(id, newName)
@@ -993,16 +1085,17 @@ function Block({
             }}
             autoFocus
             style={{
-                width: '100px',
+                width: `${Math.max(60, Math.min(150, editingLabelText.length * 8 + 20))}px`,
                 height: '20px',
                 fontSize: '12px',
                 textAlign: 'center',
                 border: '1px solid #333',
                 borderRadius: '2px',
-                padding: '2px',
+                padding: '2px 4px',
                 outline: 'none',
                 backgroundColor: 'white',
-                color: '#000'
+                color: '#000',
+                boxSizing: 'border-box'
             }}
         />
     </foreignObject>
